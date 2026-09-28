@@ -14,13 +14,13 @@
 </script>
 
 <svelte:head>
-	<title>RLH(AI)F, in the browser</title>
+	<title>GRPO, in the browser</title>
 </svelte:head>
 
 <div class="min-h-screen bg-gray-950 text-gray-100">
 	<main class="mx-auto max-w-5xl space-y-8 px-8 py-12 sm:px-16">
 		<header class="space-y-4">
-			<h1 class="text-sm font-bold text-white">RLH(AI)F, in the browser</h1>
+			<h1 class="text-sm font-bold text-white">GRPO, in the browser</h1>
 			<!-- The steps read as a progression. -->
 			<nav class="flex flex-wrap items-center gap-2 text-xs">
 				{#each STEPS as step, i (step.href)}

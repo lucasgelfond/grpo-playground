@@ -78,14 +78,27 @@ async function fetchRange(src: Source, start: number, end: number): Promise<Uint
 	return out;
 }
 
+/** Downloads in flight, so a background download and a load share requests. */
+const inflight = new Map<string, Promise<Uint8Array<ArrayBuffer>>>();
+
 /** A byte range of a remote file, cached in OPFS. `fromCache` says where it came from. */
 async function cachedRange(src: Source, key: string, start: number, end: number) {
 	const cacheKey = `${src.url}#${key}`;
+	const pending = inflight.get(cacheKey);
+	if (pending) return { data: await pending, fromCache: false };
 	const hit = await opfs.read(cacheKey);
 	if (hit && hit.byteLength === end - start) return { data: hit, fromCache: true };
-	const data = await fetchRange(src, start, end);
-	await opfs.write(cacheKey, data);
-	return { data, fromCache: false };
+	const download = (async () => {
+		const data = await fetchRange(src, start, end);
+		await opfs.write(cacheKey, data);
+		return data;
+	})();
+	inflight.set(cacheKey, download);
+	try {
+		return { data: await download, fromCache: false };
+	} finally {
+		inflight.delete(cacheKey);
+	}
 }
 
 /**
