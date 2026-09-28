@@ -107,7 +107,8 @@
 					<div class="grid grid-cols-2 gap-3">
 						{#each ex.replies as reply, k (k)}
 							<div class="card min-h-12 p-3 text-[0.85rem] leading-relaxed whitespace-pre-wrap">
-								{reply || (busy && i === exchanges.length - 1 ? '…' : '')}
+								{reply ||
+									(busy && i === exchanges.length - 1 ? (runtime.chatWaiting ? 'waiting for the training pass to finish…' : '…') : '')}
 							</div>
 						{/each}
 					</div>

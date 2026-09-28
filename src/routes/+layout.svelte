@@ -17,7 +17,7 @@
 	<title>GRPO, in the browser</title>
 </svelte:head>
 
-<div class="min-h-screen bg-gray-950 text-gray-100">
+<div class="min-h-screen overflow-x-clip bg-gray-950 text-gray-100">
 	<main class="mx-auto max-w-5xl space-y-8 px-8 py-12 sm:px-16">
 		<header class="space-y-4">
 			<h1 class="text-sm font-bold text-white">GRPO, in the browser</h1>

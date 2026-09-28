@@ -103,6 +103,8 @@ class Runtime {
 	passes = $state<Pass[]>([]);
 	running = $state(false);
 	playing = $state(false);
+	/** A chat message is waiting for the current training pass to finish. */
+	chatWaiting = $state(false);
 	/** Which pass the training view shows; null follows the latest. */
 	viewing = $state<number | null>(null);
 
@@ -139,6 +141,7 @@ class Runtime {
 	 */
 	#references = new Map<string, { answers: Answer[]; next: number }>();
 	#chatSaved: { id: string; side: ChatSide } | null = null;
+	#gpuTurn: Promise<unknown> = Promise.resolve();
 
 	get currentPass(): Pass | undefined {
 		return this.viewing === null ? this.passes.at(-1) : this.passes[this.viewing];
@@ -339,6 +342,10 @@ class Runtime {
 	async runPass(): Promise<void> {
 		if (this.running) return;
 		this.running = true;
+		return this.#exclusive(() => this.#runPass());
+	}
+
+	async #runPass(): Promise<void> {
 		this.error = null;
 		try {
 			await this.load();
@@ -529,6 +536,13 @@ class Runtime {
 		this.playing = false;
 	}
 
+	/** Training passes and chat share the GPU and the policy's weights, so they take turns. */
+	#exclusive<T>(fn: () => Promise<T>): Promise<T> {
+		const next = this.#gpuTurn.then(fn, fn);
+		this.#gpuTurn = next.catch(() => {});
+		return next;
+	}
+
 	// --- saving, exporting and chatting -----------------------------------------------
 
 	/** Trained models, from the database; their weights live in OPFS under `id`. */
@@ -711,6 +725,19 @@ class Runtime {
 	 * Weights are resolved one side at a time, then both generate in parallel.
 	 */
 	async chatPair(
+		sources: [string, string],
+		baseId: string,
+		histories: [ChatTurn[], ChatTurn[]],
+		onText: (side: 0 | 1, text: string) => void
+	): Promise<[string, string]> {
+		this.chatWaiting = this.running;
+		return this.#exclusive(async () => {
+			this.chatWaiting = false;
+			return this.#chatPair(sources, baseId, histories, onText);
+		});
+	}
+
+	async #chatPair(
 		sources: [string, string],
 		baseId: string,
 		histories: [ChatTurn[], ChatTurn[]],
