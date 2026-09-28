@@ -178,6 +178,7 @@
 	<div
 		class="relative origin-top-left"
 		style:width="{width}px"
+		style:margin-left="{Math.max(0, (available - width * scale) / 2)}px"
 		style:height="{height + PAD * 2}px"
 		style:transform="scale({scale})"
 	>

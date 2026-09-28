@@ -215,8 +215,8 @@
 
 	</div>
 	{#if runtime.error}<p class="-mt-3 text-[0.8rem] text-danger">{runtime.error}</p>{/if}
-	<!-- The pass, as a graph -->
-	<section class="card p-3">
+	<!-- The pass, as a graph: full bleed, breaking out of the page column -->
+	<section class="relative left-1/2 w-screen -translate-x-1/2 border-y border-gray-800/60 bg-gray-950 px-8 py-3 sm:px-16">
 		<PassGraph
 			{pass}
 			groupSize={config.groupSize}
