@@ -1,0 +1,42 @@
+import { MODELS, type ModelDef } from '$lib/models/registry';
+import { downloadWeights, isCached, persistStorage } from '$lib/models/weights';
+
+/**
+ * Model downloads, started as soon as the models page opens and kept going
+ * across pages. The train page's loader shares the same in-flight requests
+ * (see weights.ts), so nothing is fetched twice.
+ */
+export type DownloadState = { loaded: number; total: number; done: boolean; queued?: boolean; error?: string };
+
+export const downloads: Record<string, DownloadState> = $state({});
+
+const started = new Set<string>();
+
+async function ensure(def: ModelDef) {
+	if (started.has(def.id)) return;
+	started.add(def.id);
+	downloads[def.id] = { loaded: 0, total: def.downloadBytes, done: false };
+	try {
+		if (await isCached(def)) {
+			downloads[def.id] = { loaded: def.downloadBytes, total: def.downloadBytes, done: true };
+			return;
+		}
+		await persistStorage();
+		await downloadWeights(def, (p) => Object.assign(downloads[def.id], { loaded: p.loaded, total: p.total }));
+		downloads[def.id].done = true;
+	} catch (e) {
+		started.delete(def.id);
+		downloads[def.id].error = e instanceof Error ? e.message : String(e);
+	}
+}
+
+/** Download these models one after another (small first), if not already cached. */
+export async function downloadAll(ids: string[]) {
+	const defs = ids.map((id) => MODELS.find((m) => m.id === id)!).sort((a, b) => a.downloadBytes - b.downloadBytes);
+	for (const def of defs) {
+		if (!started.has(def.id) && !downloads[def.id]?.done) {
+			downloads[def.id] = { loaded: 0, total: def.downloadBytes, done: false, queued: true };
+		}
+	}
+	for (const def of defs) await ensure(def);
+}

@@ -2,9 +2,9 @@
 	import { onMount } from 'svelte';
 
 	import { formatBytes, getModel, MODELS, type ModelDef } from '$lib/models/registry';
-	import { downloadWeights, isCached, persistStorage } from '$lib/models/weights';
-	import { estimateCost, type Mode } from '$lib/rl/trainer';
+		import { estimateCost, type Mode } from '$lib/rl/trainer';
 	import { config } from '$lib/state/config.svelte';
+	import { downloadAll, downloads } from '$lib/state/downloads.svelte';
 	import { runtime } from '$lib/state/runtime.svelte';
 
 	// Just the small model for now: fast passes and room beside the judge.
@@ -12,29 +12,12 @@
 	// Choosing between answers needs the 1.5B judge; the 0.5B nearly always picks the first answer.
 	const judges = MODELS.filter((m) => m.judge && m.id !== 'qwen2.5-0.5b');
 
-	let cached = $state<Record<string, boolean | undefined>>({});
-	let downloading = $state<Record<string, number | undefined>>({});
-	let downloadError = $state('');
-
-	async function download(m: ModelDef) {
-		downloadError = '';
-		downloading[m.id] = 0;
-		await persistStorage();
-		try {
-			await downloadWeights(m, (p) => (downloading[m.id] = p.loaded / p.total));
-			cached[m.id] = true;
-		} catch (e) {
-			downloadError = `${m.label}: ${e instanceof Error ? e.message : e}`;
-		} finally {
-			downloading[m.id] = undefined;
-		}
-	}
+	onMount(() => {
+		deviceMemory = (navigator as Navigator & { deviceMemory?: number }).deviceMemory;
+		void downloadAll([config.policyId, config.judgeId]);
+	});
 	// Browsers only expose a rounded RAM figure, capped at 8 GB (Chrome); no GPU memory.
 	let deviceMemory = $state<number | undefined>();
-	onMount(async () => {
-		deviceMemory = (navigator as Navigator & { deviceMemory?: number }).deviceMemory;
-		for (const m of MODELS) cached[m.id] = await isCached(m);
-	});
 
 	const policy = $derived(getModel(config.policyId));
 	const judge = $derived(getModel(config.judgeId));
@@ -55,24 +38,28 @@
 		})
 	);
 
-	const label = (m: ModelDef) => `${m.label} (${m.params} / ${formatBytes(m.downloadBytes)})`;
 	const fmtParams = (n: number) => (n >= 1e9 ? `${(n / 1e9).toFixed(2)}B` : `${(n / 1e6).toFixed(1)}M`);
 </script>
 
-{#snippet modelRadio(m: ModelDef, name: string, group: 'policyId' | 'judgeId')}
-	<div class="flex items-center gap-2 text-[0.85rem] whitespace-nowrap">
-		<label
-			class={['flex items-center gap-2', !cached[m.id] && 'cursor-not-allowed text-ink-soft']}
-			title={cached[m.id] ? undefined : 'Download this model first'}
-		>
-			<input type="radio" {name} value={m.id} bind:group={config[group]} disabled={!cached[m.id]} />
-			{label(m)}
-		</label>
-		{#if downloading[m.id] !== undefined}
-			<span class="text-[0.75rem] text-ink-soft tabular-nums">{Math.round(downloading[m.id]! * 100)}%</span>
-		{:else if cached[m.id] === false}
-			<button type="button" class="text-[0.75rem] text-ink-soft underline hover:text-ink" onclick={() => download(m)}>download</button>
+{#snippet modelRow(m: ModelDef)}
+	{@const d = downloads[m.id]}
+	<div class="max-w-sm space-y-1 text-[0.85rem]">
+		<div class="flex items-baseline justify-between gap-3">
+			<span>{m.label}</span>
+			<span class="text-xs whitespace-nowrap text-gray-500 tabular-nums">
+				{#if d?.error}<span class="text-danger">download failed</span>
+				{:else if d?.done}<span class="text-up">downloaded</span> · {formatBytes(m.downloadBytes)}
+				{:else if d?.queued}queued · {formatBytes(m.downloadBytes)}
+				{:else if d}{formatBytes(d.loaded)} / {formatBytes(m.downloadBytes)}
+				{:else}{formatBytes(m.downloadBytes)}{/if}
+			</span>
+		</div>
+		{#if d && !d.done && !d.error && !d.queued}
+			<div class="h-1 overflow-hidden rounded-full bg-muted">
+				<div class="h-full bg-accent transition-[width]" style:width="{(100 * d.loaded) / Math.max(1, d.total)}%"></div>
+			</div>
 		{/if}
+		{#if d?.error}<p class="text-xs text-danger">{d.error}</p>{/if}
 	</div>
 {/snippet}
 
@@ -80,21 +67,12 @@
 	<section class="grid gap-6 sm:grid-cols-2">
 		<fieldset class="space-y-2">
 			<legend class="label mb-2">fine-tune</legend>
-			{#each trainees as m (m.id)}{@render modelRadio(m, 'policy', 'policyId')}{/each}
+			{#each trainees as m (m.id)}{@render modelRow(m)}{/each}
 		</fieldset>
 		<fieldset class="space-y-2">
 			<legend class="label mb-2">judge</legend>
-			{#each judges as m (m.id)}{@render modelRadio(m, 'judge', 'judgeId')}{/each}
+			{#each judges as m (m.id)}{@render modelRow(m)}{/each}
 		</fieldset>
-		{#if downloadError}<p class="text-[0.78rem] text-danger sm:col-span-2">{downloadError}</p>{/if}
-	</section>
-
-	<section class="space-y-2">
-		<h2 class="label">algorithm</h2>
-		<label class="flex w-fit items-center gap-2 text-[0.85rem]" title="PPO and DPO are planned: see TODO.md">
-			<input type="radio" checked />
-			grpo
-		</label>
 	</section>
 
 	<section class="space-y-2">
