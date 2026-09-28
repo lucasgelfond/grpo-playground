@@ -163,10 +163,15 @@ export class PolicyTrainer {
 	}
 
 	/**
-	 * One GRPO step on a group of completions of the same prompt.
-	 * Advantage = (reward - group mean) / group std; loss = -mean over real
-	 * completion tokens of advantage * log π(token). With one update per batch
-	 * the PPO ratio is exactly 1, so no clipping is needed.
+	 * One GRPO step (DeepSeekMath) on a group of G completions of one prompt:
+	 *
+	 *   J = 1/G Σ_i 1/|o_i| Σ_t [ Â_i · log π(o_i,t)  −  β · KL_t(π ‖ π_ref) ]
+	 *
+	 * with Â_i = (r_i − mean(r)) / std(r), the same for every token of answer i.
+	 * Each answer counts equally however long it is (per-answer token mean,
+	 * then group mean). We take one gradient step per group of samples, so the
+	 * PPO ratio π/π_old is exactly 1 and its clipping never activates; the
+	 * gradient is exactly Â · ∇log π. Groups whose rewards all tie are skipped.
 	 */
 	async update(
 		promptIds: number[],
@@ -190,15 +195,16 @@ export class PolicyTrainer {
 		const { row: promptRow, pad } = leftPad(promptIds, P, padToken);
 		const ids = new Int32Array(G * (P + L));
 		const targets = new Int32Array(G * L).fill(padToken);
-		const mask = new Float32Array(G * L);
+		// Per-token weights 1 / (|o_i| · G): mean over each answer's tokens, then
+		// over the group. Padding gets weight 0. Microbatch gradients add up.
+		const weights = new Float32Array(G * L);
 		completions.forEach((c, g) => {
 			ids.set(promptRow, g * (P + L));
 			ids.fill(padToken, g * (P + L) + P, (g + 1) * (P + L));
 			ids.set(c, g * (P + L) + P);
 			targets.set(c, g * L);
-			mask.fill(1, g * L, g * L + c.length);
+			if (c.length) weights.fill(1 / (c.length * G), g * L, g * L + c.length);
 		});
-		const norm = mask.reduce((s, m) => s + m, 0);
 		const invTemp = 1 / this.settings.temperature;
 
 		const batch = (start: number, end: number) => ({
@@ -240,9 +246,9 @@ export class PolicyTrainer {
 				b.ids,
 				b.pad,
 				b.targets,
-				np.array(mask.subarray(start * L, end * L), { shape: [end - start, L] }),
+				np.array(weights.subarray(start * L, end * L), { shape: [end - start, L] }),
 				np.array(new Float32Array(advantages.slice(start, end))),
-				np.array(norm),
+				np.array(1),
 				np.array(refFlat.subarray(start * L, end * L), { shape: [end - start, L] }),
 				np.array(klBeta),
 				invTemp

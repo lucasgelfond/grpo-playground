@@ -325,11 +325,12 @@ export function compileModel(cfg: ModelConfig, opts: { loraRank?: number; loraAl
 	const logprobsJit = jit(completionLogprobs, { staticArgnums: [5] });
 
 	/**
-	 * GRPO loss for one (micro)batch, token-mean normalized by `norm` (the mask
-	 * sum over the full batch, so microbatch gradients simply add up):
+	 * GRPO loss for one (micro)batch:
 	 *
-	 *   loss = -mean_tokens[ A · log π(t)  -  β · KL_t(π ‖ π_ref) ]
+	 *   loss = −Σ_{i,t} w_it [ Â_i · log π(t)  −  β · KL_t(π ‖ π_ref) ] / norm
 	 *
+	 * `mask` holds per-token weights w_it (1 / (|o_i| · G) for GRPO's
+	 * per-answer mean, 0 on padding), so microbatch gradients simply add up.
 	 * The KL term is the per-token "k3" estimator from GRPO (DeepSeekMath),
 	 * exp(r) - r - 1 with r = log π_ref - log π: always >= 0, zero when the
 	 * policy matches the reference. It's the classic RLHF leash that keeps the
