@@ -72,8 +72,24 @@ export type LoadItem = { label: string; loaded: number; total: number; downloade
 
 type ChatSide = { weights: Weights; lora: Lora | null };
 
+/**
+ * What makes a project: its models, how they're trained, and what they're
+ * trained on. Changing any of these starts a new project (fresh model, new
+ * name, new database row) instead of silently changing the task mid-run.
+ */
 function trainingKey(c: Config): string {
-	return JSON.stringify([c.policyId, c.judgeId, c.mode, c.loraRank, c.loraAlpha, learningRate(c), c.temperature]);
+	return JSON.stringify([
+		c.policyId,
+		c.judgeId,
+		c.mode,
+		c.loraRank,
+		c.loraAlpha,
+		learningRate(c),
+		c.temperature,
+		c.prompts.map((p) => p.trim()).filter(Boolean),
+		c.constitution.trim(),
+		c.rule
+	]);
 }
 
 class Runtime {

@@ -59,7 +59,8 @@
 
 	onMount(() => {
 		void runtime.refreshSaved();
-		if (!runtime.ready && !runtime.loading) void runtime.load();
+		// A new project if nothing is loaded yet, or if the models, prompts or judge changed.
+		if ((!runtime.ready || runtime.needsReload) && !runtime.loading && !runtime.running) void runtime.load();
 	});
 
 	// ③ and ④: one chart each, with a toggle for what it shows.
