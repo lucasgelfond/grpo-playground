@@ -1,0 +1,106 @@
+import { DEFAULT_TASK } from '$lib/presets';
+import type { RuleId } from '$lib/rl/rules';
+import type { Mode } from '$lib/rl/trainer';
+
+/**
+ * Everything the user configures before training. Persisted to localStorage
+ * so a reload keeps the prompts and constitution.
+ */
+export type Config = {
+	policyId: string;
+	judgeId: string;
+	mode: Mode;
+	prompts: string[];
+	promptOrder: 'sequential' | 'shuffle';
+	constitution: string;
+	/** Rule check for the loaded task preset, if it has one. */
+	rule: RuleId | null;
+	/** Training algorithm. Only GRPO is built so far (see TODO.md). */
+	method: 'grpo' | 'ppo' | 'dpo';
+	/** How the judge rewards answers: choose between pairs, or score each alone. */
+	judgeMode: 'compare' | 'score';
+	/** In compare mode, how many head-to-head matches each answer plays per pass. */
+	matchesPerAnswer: number;
+	/** Ask every pair in both A/B orders (2× judge cost) instead of one random order. */
+	bothOrders: boolean;
+	/** Where the reward comes from: the judge, the rule check, or their average. */
+	rewardSource: 'judge' | 'rule' | 'both';
+	groupSize: number;
+	maxNew: number;
+	temperature: number;
+	loraLearningRate: number;
+	fullLearningRate: number;
+	loraRank: number;
+	loraAlpha: number;
+	/** Weight of the KL penalty toward the original model (0 turns it off). */
+	klBeta: number;
+};
+
+export const DEFAULT_CONFIG: Config = {
+	policyId: 'smollm2-135m',
+	judgeId: 'qwen2.5-1.5b',
+	mode: 'lora',
+	prompts: DEFAULT_TASK.prompts.slice(0, 5),
+	promptOrder: 'shuffle',
+	constitution: DEFAULT_TASK.constitution,
+	rule: DEFAULT_TASK.rule ?? null,
+	method: 'grpo',
+	judgeMode: 'compare',
+	matchesPerAnswer: 3,
+	bothOrders: false,
+	rewardSource: 'judge',
+	// Few answers per prompt keeps the judge cheap (a round robin of 4 is 6
+	// pairs): more prompts per minute beats a finer ranking of each group.
+	groupSize: 4,
+	// Hot, long-ish sampling: answers need room to finish and enough variety
+	// within each group of 8 for GRPO to have something to prefer.
+	maxNew: 256,
+	temperature: 1.0,
+	loraLearningRate: 3e-4,
+	fullLearningRate: 1e-5,
+	loraRank: 16,
+	loraAlpha: 32,
+	klBeta: 0.05
+};
+
+// v3: start everyone on the "yes or no first" preset.
+const KEY = 'jax-rl-model:config:v3';
+
+function load(): Config {
+	try {
+		const raw = localStorage.getItem(KEY);
+		if (raw) {
+			const saved = JSON.parse(raw);
+			// Settings saved before the smaller-group default: move them to 4 answers.
+			if (!('bothOrders' in saved)) saved.groupSize = DEFAULT_CONFIG.groupSize;
+			// Choosing between answers is the only judge mode now, and it needs the 1.5B judge.
+			saved.judgeMode = 'compare';
+			// Answers used to be cut off at 128 tokens; give them room to finish.
+			if ((saved.maxNew ?? 0) < 256) saved.maxNew = DEFAULT_CONFIG.maxNew;
+			if (saved.judgeId === 'qwen2.5-0.5b') saved.judgeId = DEFAULT_CONFIG.judgeId;
+			// Only the 135M model is offered for training for now.
+			if (saved.policyId !== DEFAULT_CONFIG.policyId) saved.policyId = DEFAULT_CONFIG.policyId;
+			return { ...DEFAULT_CONFIG, ...saved };
+		}
+	} catch {
+		// Storage can be unavailable (private mode, blocked site data).
+	}
+	return structuredClone(DEFAULT_CONFIG);
+}
+
+export const config: Config = $state(load());
+
+$effect.root(() => {
+	$effect(() => {
+		const snapshot = JSON.stringify(config);
+		try {
+			localStorage.setItem(KEY, snapshot);
+		} catch {
+			// Ignore: persistence is a convenience.
+		}
+	});
+});
+
+export function learningRate(c: Config): number {
+	return c.mode === 'lora' ? c.loraLearningRate : c.fullLearningRate;
+}

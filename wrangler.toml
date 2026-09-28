@@ -1,0 +1,11 @@
+# Static site on Cloudflare (Workers static assets), like autoresearch-webgpu.
+# Model weights are served separately from R2 (models.lucasgelfond.online).
+name = "rlplayground"
+compatibility_date = "2026-09-01"
+routes = [
+  { pattern = "rlplayground.lucasgelfond.online", custom_domain = true }
+]
+
+[assets]
+directory = "build"
+not_found_handling = "single-page-application"

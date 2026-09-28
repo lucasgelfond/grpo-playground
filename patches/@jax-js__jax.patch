@@ -1,0 +1,84 @@
+diff --git a/dist/index.cjs b/dist/index.cjs
+index 822804b4f973094d90a900adff2662c3b1acb3cd..2d891b559c9f01c011327ef4efbd4c5f494df2ed 100644
+--- a/dist/index.cjs
++++ b/dist/index.cjs
+@@ -2388,13 +2388,14 @@ function splitGraphDataflow(backend, jaxpr) {
+ 		for (let axis = 0; axis < promoted.length - 1; axis++) if ((axis < offset ? 1 : shape[axis - offset]) === 1 && promoted[axis] > 1) return true;
+ 		return false;
+ 	};
+-	const markNonViewProducer = (v) => {
++	const markNonViewProducer = (v, throughCasts = false) => {
+ 		let current = v;
+ 		while (true) {
+ 			const defn = varToDefn.get(current);
+ 			if (defn === void 0) return;
+ 			const eqn = jaxpr.eqns[defn];
+-			if (!viewPrimitives.includes(eqn.primitive)) break;
++			// PATCH(jax-rl-model): a cast is cheap to redo per reuse, so matmuls read f16 weights directly.
++			if (!(viewPrimitives.includes(eqn.primitive) || throughCasts && eqn.primitive === "cast")) break;
+ 			const input = eqn.inputs.find((input) => input instanceof Var);
+ 			if (!input) return;
+ 			current = input;
+@@ -2410,7 +2411,7 @@ function splitGraphDataflow(backend, jaxpr) {
+ 		}
+ 		if (!inputShapes) continue;
+ 		const promoted = require_backend.generalBroadcast(inputShapes[0], inputShapes[1]);
+-		for (const [i, input] of eqn.inputs.entries()) if (input instanceof Var && reductionInputHasReuse(inputShapes[i], promoted)) markNonViewProducer(input);
++		for (const [i, input] of eqn.inputs.entries()) if (input instanceof Var && reductionInputHasReuse(inputShapes[i], promoted)) markNonViewProducer(input, true);
+ 	}
+ 	const blackNodes = /* @__PURE__ */ new Set();
+ 	const p1NextBlack = /* @__PURE__ */ new Map();
+@@ -2420,7 +2421,10 @@ function splitGraphDataflow(backend, jaxpr) {
+ 	}
+ 	const heterogeneousViewPrimitives = ["random_bits", "gather"];
+ 	const needsCleanShapePrimitives = ["concatenate", "pad"];
+-	for (const eqn of jaxpr.eqns) if (needsCleanShapePrimitives.includes(eqn.primitive) || routinePrimitives.has(eqn.primitive)) {
++	for (const eqn of jaxpr.eqns) if (routinePrimitives.has(eqn.primitive)) {
++		// PATCH(jax-rl-model): routines read dispatched buffers, so materialize view inputs themselves.
++		for (const input of eqn.inputs) if (input instanceof Var) materializedProducers.add(input);
++	} else if (needsCleanShapePrimitives.includes(eqn.primitive)) {
+ 		for (const input of eqn.inputs) if (input instanceof Var) markNonViewProducer(input);
+ 	}
+ 	for (let i = jaxpr.eqns.length - 1; i >= 0; i--) {
+diff --git a/dist/index.js b/dist/index.js
+index eb5c251cce4d9831c7194e15c44cfea2f12b9c5a..0811989219b8ec8e81f9af52008217c82f0b0dc2 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -2376,13 +2376,14 @@ function splitGraphDataflow(backend, jaxpr) {
+ 		for (let axis = 0; axis < promoted.length - 1; axis++) if ((axis < offset ? 1 : shape[axis - offset]) === 1 && promoted[axis] > 1) return true;
+ 		return false;
+ 	};
+-	const markNonViewProducer = (v) => {
++	const markNonViewProducer = (v, throughCasts = false) => {
+ 		let current = v;
+ 		while (true) {
+ 			const defn = varToDefn.get(current);
+ 			if (defn === void 0) return;
+ 			const eqn = jaxpr.eqns[defn];
+-			if (!viewPrimitives.includes(eqn.primitive)) break;
++			// PATCH(jax-rl-model): a cast is cheap to redo per reuse, so matmuls read f16 weights directly.
++			if (!(viewPrimitives.includes(eqn.primitive) || throughCasts && eqn.primitive === "cast")) break;
+ 			const input = eqn.inputs.find((input) => input instanceof Var);
+ 			if (!input) return;
+ 			current = input;
+@@ -2398,7 +2399,7 @@ function splitGraphDataflow(backend, jaxpr) {
+ 		}
+ 		if (!inputShapes) continue;
+ 		const promoted = generalBroadcast(inputShapes[0], inputShapes[1]);
+-		for (const [i, input] of eqn.inputs.entries()) if (input instanceof Var && reductionInputHasReuse(inputShapes[i], promoted)) markNonViewProducer(input);
++		for (const [i, input] of eqn.inputs.entries()) if (input instanceof Var && reductionInputHasReuse(inputShapes[i], promoted)) markNonViewProducer(input, true);
+ 	}
+ 	const blackNodes = /* @__PURE__ */ new Set();
+ 	const p1NextBlack = /* @__PURE__ */ new Map();
+@@ -2408,7 +2409,10 @@ function splitGraphDataflow(backend, jaxpr) {
+ 	}
+ 	const heterogeneousViewPrimitives = ["random_bits", "gather"];
+ 	const needsCleanShapePrimitives = ["concatenate", "pad"];
+-	for (const eqn of jaxpr.eqns) if (needsCleanShapePrimitives.includes(eqn.primitive) || routinePrimitives.has(eqn.primitive)) {
++	for (const eqn of jaxpr.eqns) if (routinePrimitives.has(eqn.primitive)) {
++		// PATCH(jax-rl-model): routines read dispatched buffers, so materialize view inputs themselves.
++		for (const input of eqn.inputs) if (input instanceof Var) materializedProducers.add(input);
++	} else if (needsCleanShapePrimitives.includes(eqn.primitive)) {
+ 		for (const input of eqn.inputs) if (input instanceof Var) markNonViewProducer(input);
+ 	}
+ 	for (let i = jaxpr.eqns.length - 1; i >= 0; i--) {

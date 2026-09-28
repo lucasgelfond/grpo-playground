@@ -1,0 +1,83 @@
+@import 'tailwindcss';
+
+/*
+ * Styled after autoresearch-webgpu: a dark gray-950 page, monospace
+ * everywhere, small type, gray-800 hairlines, blue-600 for the primary action
+ * and blue for progress. Green and red appear only in data (probability up /
+ * down, advantage sign, wins / losses).
+ */
+@theme inline {
+	--color-background: var(--color-gray-950);
+	--color-ink: var(--color-gray-200);
+	--color-ink-soft: var(--color-gray-500);
+	--color-panel: var(--color-gray-950);
+	--color-muted: var(--color-gray-800);
+	--color-accent: var(--color-blue-500);
+	--color-accent-ink: var(--color-white);
+	--color-hover: var(--color-gray-800);
+	--color-rule: var(--color-gray-800);
+	--color-rule-strong: var(--color-gray-700);
+	--color-danger: var(--color-red-400);
+	--color-up: var(--color-green-400);
+	--color-up-soft: color-mix(in oklch, var(--color-green-400) 18%, transparent);
+	--color-down: var(--color-red-400);
+	--color-down-soft: color-mix(in oklch, var(--color-red-400) 18%, transparent);
+	--font-terminal: ui-monospace, 'SF Mono', Menlo, monospace;
+	--radius-token: 0.25rem;
+}
+
+@utility hairline {
+	border-style: solid;
+	border-width: 1px;
+}
+@utility hairline-b {
+	border-bottom-style: solid;
+	border-bottom-width: 1px;
+}
+@utility hairline-t {
+	border-top-style: solid;
+	border-top-width: 1px;
+}
+
+:root {
+	color-scheme: dark;
+}
+
+html,
+body {
+	background: var(--color-gray-950);
+	color: var(--color-gray-200);
+}
+
+body {
+	font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+	font-size: 12px;
+	-webkit-font-smoothing: antialiased;
+}
+
+input[type='radio'],
+input[type='checkbox'] {
+	accent-color: var(--color-blue-500);
+}
+
+button:not(:disabled) {
+	cursor: pointer;
+}
+
+@layer components {
+	.btn {
+		@apply inline-flex items-center justify-center gap-1.5 rounded border border-gray-700 bg-gray-800 px-3 py-1 text-xs text-gray-300 transition-colors hover:bg-gray-700 hover:text-white disabled:opacity-40;
+	}
+	.btn-primary {
+		@apply inline-flex items-center justify-center gap-1.5 rounded bg-blue-600 px-3 py-1.5 text-xs text-white transition-colors hover:bg-blue-500 disabled:bg-gray-700 disabled:text-gray-500;
+	}
+	.card {
+		@apply rounded border border-gray-800 bg-gray-950;
+	}
+	.field {
+		@apply w-full rounded border border-gray-700 bg-gray-800 px-2 py-1 text-xs text-gray-200 outline-none placeholder:text-gray-500 focus:border-blue-600;
+	}
+	.label {
+		@apply text-xs text-gray-400;
+	}
+}
