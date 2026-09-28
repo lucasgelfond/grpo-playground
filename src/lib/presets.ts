@@ -47,7 +47,7 @@ Penalize answers that do not end with a question, and answers longer than three 
 	{
 		id: 'yes-no',
 		rule: 'yes-no',
-		label: 'Yes or no first',
+		label: 'Starts with yes or no',
 		constitution: `Every question can be answered yes or no.
 Reward answers whose very first word is "Yes" or "No", followed by at most one short sentence of explanation.
 Penalize answers that do not start with Yes or No, and long answers.`,

@@ -228,6 +228,7 @@
 			name={runtime.sessionName || '…'}
 			createdAt={runtime.sessionCreatedAt}
 			judgePromptText={config.constitution}
+			judgePreset={TASKS.find((t) => t.constitution === config.constitution)?.label}
 			showReference={config.judgeMode === 'compare'}
 			onrename={(n) => runtime.renameSession(n)}
 		/>
