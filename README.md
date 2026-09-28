@@ -1,6 +1,6 @@
-# RLH(AI)F, in the browser
+# GRPO playground
 
-RL fine-tuning of a small language model, entirely in the browser, with [jax-js](https://github.com/ekzhang/jax-js) on WebGPU. Live at [rlplayground.lucasgelfond.online](https://rlplayground.lucasgelfond.online).
+RL fine-tuning of a small language model, entirely in the browser, with [jax-js](https://github.com/ekzhang/jax-js) on WebGPU. Live at [grpo.lucasgelfond.online](https://grpo.lucasgelfond.online).
 
 A small model (SmolLM2 135M) answers each prompt several times. A bigger local model (Qwen2.5 1.5B) acts as the judge: it chooses between pairs of answers according to a judge prompt you write. GRPO then nudges the small model toward the answers that won. Every stage of every pass is drawn as a graph (prompt → policy model → answers → judge → ranking → update), with charts of what changed.
 

@@ -14,7 +14,7 @@ index 822804b4f973094d90a900adff2662c3b1acb3cd..2d891b559c9f01c011327ef4efbd4c5f
  			if (defn === void 0) return;
  			const eqn = jaxpr.eqns[defn];
 -			if (!viewPrimitives.includes(eqn.primitive)) break;
-+			// PATCH(jax-rl-model): a cast is cheap to redo per reuse, so matmuls read f16 weights directly.
++			// PATCH(grpo-playground): a cast is cheap to redo per reuse, so matmuls read f16 weights directly.
 +			if (!(viewPrimitives.includes(eqn.primitive) || throughCasts && eqn.primitive === "cast")) break;
  			const input = eqn.inputs.find((input) => input instanceof Var);
  			if (!input) return;
@@ -34,7 +34,7 @@ index 822804b4f973094d90a900adff2662c3b1acb3cd..2d891b559c9f01c011327ef4efbd4c5f
  	const needsCleanShapePrimitives = ["concatenate", "pad"];
 -	for (const eqn of jaxpr.eqns) if (needsCleanShapePrimitives.includes(eqn.primitive) || routinePrimitives.has(eqn.primitive)) {
 +	for (const eqn of jaxpr.eqns) if (routinePrimitives.has(eqn.primitive)) {
-+		// PATCH(jax-rl-model): routines read dispatched buffers, so materialize view inputs themselves.
++		// PATCH(grpo-playground): routines read dispatched buffers, so materialize view inputs themselves.
 +		for (const input of eqn.inputs) if (input instanceof Var) materializedProducers.add(input);
 +	} else if (needsCleanShapePrimitives.includes(eqn.primitive)) {
  		for (const input of eqn.inputs) if (input instanceof Var) markNonViewProducer(input);
@@ -56,7 +56,7 @@ index eb5c251cce4d9831c7194e15c44cfea2f12b9c5a..0811989219b8ec8e81f9af52008217c8
  			if (defn === void 0) return;
  			const eqn = jaxpr.eqns[defn];
 -			if (!viewPrimitives.includes(eqn.primitive)) break;
-+			// PATCH(jax-rl-model): a cast is cheap to redo per reuse, so matmuls read f16 weights directly.
++			// PATCH(grpo-playground): a cast is cheap to redo per reuse, so matmuls read f16 weights directly.
 +			if (!(viewPrimitives.includes(eqn.primitive) || throughCasts && eqn.primitive === "cast")) break;
  			const input = eqn.inputs.find((input) => input instanceof Var);
  			if (!input) return;
@@ -76,7 +76,7 @@ index eb5c251cce4d9831c7194e15c44cfea2f12b9c5a..0811989219b8ec8e81f9af52008217c8
  	const needsCleanShapePrimitives = ["concatenate", "pad"];
 -	for (const eqn of jaxpr.eqns) if (needsCleanShapePrimitives.includes(eqn.primitive) || routinePrimitives.has(eqn.primitive)) {
 +	for (const eqn of jaxpr.eqns) if (routinePrimitives.has(eqn.primitive)) {
-+		// PATCH(jax-rl-model): routines read dispatched buffers, so materialize view inputs themselves.
++		// PATCH(grpo-playground): routines read dispatched buffers, so materialize view inputs themselves.
 +		for (const input of eqn.inputs) if (input instanceof Var) materializedProducers.add(input);
 +	} else if (needsCleanShapePrimitives.includes(eqn.primitive)) {
  		for (const input of eqn.inputs) if (input instanceof Var) markNonViewProducer(input);

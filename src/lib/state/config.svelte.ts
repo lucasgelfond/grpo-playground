@@ -64,11 +64,13 @@ export const DEFAULT_CONFIG: Config = {
 };
 
 // v3: start everyone on the "yes or no first" preset.
-const KEY = 'jax-rl-model:config:v3';
+const KEY = 'grpo-playground:config:v3';
+/** Where settings lived before the rename; read once so nothing is lost. */
+const OLD_KEY = 'jax-rl-model:config:v3';
 
 function load(): Config {
 	try {
-		const raw = localStorage.getItem(KEY);
+		const raw = localStorage.getItem(KEY) ?? localStorage.getItem(OLD_KEY);
 		if (raw) {
 			const saved = JSON.parse(raw);
 			// Settings saved before the smaller-group default: move them to 4 answers.
