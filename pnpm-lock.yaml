@@ -6,7 +6,7 @@ settings:
 
 patchedDependencies:
   '@jax-js/jax':
-    hash: 40ce7d742afc0790cf618c4264a516613e52eb112331b8d058054190d4acf132
+    hash: b0908ec0f5527d2029b1e72d7c71cdd906e5cfd934c12bfbe3956630b16dfb61
     path: patches/@jax-js__jax.patch
 
 importers:
@@ -18,7 +18,7 @@ importers:
         version: 0.5.8
       '@jax-js/jax':
         specifier: ^0.1.25
-        version: 0.1.25(patch_hash=40ce7d742afc0790cf618c4264a516613e52eb112331b8d058054190d4acf132)
+        version: 0.1.25(patch_hash=b0908ec0f5527d2029b1e72d7c71cdd906e5cfd934c12bfbe3956630b16dfb61)
       '@jax-js/loaders':
         specifier: ^0.1.3
         version: 0.1.3
@@ -731,7 +731,7 @@ snapshots:
 
   '@electric-sql/pglite@0.5.8': {}
 
-  '@jax-js/jax@0.1.25(patch_hash=40ce7d742afc0790cf618c4264a516613e52eb112331b8d058054190d4acf132)': {}
+  '@jax-js/jax@0.1.25(patch_hash=b0908ec0f5527d2029b1e72d7c71cdd906e5cfd934c12bfbe3956630b16dfb61)': {}
 
   '@jax-js/loaders@0.1.3':
     dependencies:
@@ -740,7 +740,7 @@ snapshots:
 
   '@jax-js/optax@0.1.2':
     dependencies:
-      '@jax-js/jax': 0.1.25(patch_hash=40ce7d742afc0790cf618c4264a516613e52eb112331b8d058054190d4acf132)
+      '@jax-js/jax': 0.1.25(patch_hash=b0908ec0f5527d2029b1e72d7c71cdd906e5cfd934c12bfbe3956630b16dfb61)
 
   '@jridgewell/gen-mapping@0.3.13':
     dependencies:
