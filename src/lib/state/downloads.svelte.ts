@@ -1,10 +1,11 @@
 import { MODELS, type ModelDef } from '$lib/models/registry';
-import { downloadWeights, isCached, persistStorage } from '$lib/models/weights';
+import { engine } from '$lib/engine/engine';
+import { persistStorage } from '$lib/models/weights';
 
 /**
  * Model downloads, started as soon as the models page opens and kept going
  * across pages. The train page's loader shares the same in-flight requests
- * (see weights.ts), so nothing is fetched twice.
+ * (see weights.ts): both run in the GPU worker, so nothing is fetched twice.
  */
 export type DownloadState = { loaded: number; total: number; done: boolean; queued?: boolean; error?: string };
 
@@ -17,12 +18,12 @@ async function ensure(def: ModelDef) {
 	started.add(def.id);
 	downloads[def.id] = { loaded: 0, total: def.downloadBytes, done: false };
 	try {
-		if (await isCached(def)) {
+		if (await engine('isCached', def.id)) {
 			downloads[def.id] = { loaded: def.downloadBytes, total: def.downloadBytes, done: true };
 			return;
 		}
 		await persistStorage();
-		await downloadWeights(def, (p) => Object.assign(downloads[def.id], { loaded: p.loaded, total: p.total }));
+		await engine('download', def.id, (p) => Object.assign(downloads[def.id], { loaded: p.loaded, total: p.total }));
 		downloads[def.id].done = true;
 	} catch (e) {
 		started.delete(def.id);
