@@ -14,7 +14,7 @@
 		name,
 		createdAt,
 		judgePromptText,
-		judgePreset,
+		judgeSummary,
 		showReference,
 		onrename
 	}: {
@@ -35,8 +35,8 @@
 		createdAt: string;
 		/** The judge's guidelines, shown when hovering the judge. */
 		judgePromptText: string;
-		/** The preset the judge prompt came from, if any, e.g. "Starts with yes or no". */
-		judgePreset: string | undefined;
+		/** The judge prompt in one line, e.g. "Starts with yes or no". */
+		judgeSummary: string;
 		/** Reserve a row for the original model's answer (GT) from the start. */
 		showReference: boolean;
 		onrename: (name: string) => void;
@@ -351,7 +351,7 @@
 			<GraphNode width={JUDGE_W} fraction={judgeFraction} live={pass?.phase === 'judging' || pass?.phase === 'prefill'}>
 				<div class="label">judge{pass?.phase === 'prefill' ? ' · prefilling' : ''}</div>
 				<div class="mt-1 text-[0.82rem] font-medium">{judgeLabel}</div>
-				{#if judgePreset}<div class="mt-0.5 text-[0.72rem] text-ink-soft">“{judgePreset}”</div>{/if}
+				{#if judgeSummary}<div class="mt-0.5 line-clamp-2 text-[0.72rem] text-ink-soft">“{judgeSummary}”</div>{/if}
 				{#if pass?.phase === 'judging' && compare}
 					<div class="mt-1.5 h-1.5 overflow-hidden rounded-full bg-muted">
 						<div class="h-full rounded-full bg-gray-200 transition-[width] duration-500" style:width="{judgeFraction * 100}%"></div>

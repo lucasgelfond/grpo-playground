@@ -1,25 +1,10 @@
-import { defaultDevice, init, numpy as np, tree } from '@jax-js/jax';
-
-import {
-	downloadBlob,
-	loraTensors,
-	parseLora,
-	parseWeights,
-	peftConfig,
-	weightTensors,
-	writeSafetensors,
-	zip
-} from '$lib/export';
-import { compileModel, type CompiledModel, type Lora } from '$lib/models/llama';
-import { chatPrompt, getModel, type ChatTurn, type ModelDef } from '$lib/models/registry';
-import { loadTokenizer, type Tokenizer } from '$lib/models/tokenizer';
-import { loadWeights, persistStorage, type Weights } from '$lib/models/weights';
-import { generate } from '$lib/rl/generate';
-import { compareAnswers, judgeAnswers, judgePrefix, schedulePairs, winRates, type JudgePrefix, type Match, type Verdict } from '$lib/rl/judge';
-import { RULES } from '$lib/rl/rules';
-import { PolicyTrainer } from '$lib/rl/trainer';
+import { downloadBlob, peftConfig, zip } from '$lib/export';
+import { engine } from '$lib/engine/engine';
+import { getModel, type ChatTurn, type ModelDef } from '$lib/models/registry';
+import { persistStorage } from '$lib/models/weights';
+import type { Match, Verdict } from '$lib/rl/judge';
 import { createProject, deleteProjectOfModel, listPolicyModels, recordPass, renameModel } from '$lib/db';
-import { deleteSaved, loadSavedWeights, newModelId, saveModel, type SavedMeta } from '$lib/saved';
+import { deleteSaved, loadSavedWeights, newModelId, type SavedMeta } from '$lib/saved';
 import { petname } from '$lib/petname';
 import { config, learningRate, type Config } from './config.svelte';
 
@@ -70,8 +55,6 @@ export type Pass = {
 
 export type LoadItem = { label: string; loaded: number; total: number; downloaded: number; done: boolean };
 
-type ChatSide = { weights: Weights; lora: Lora | null };
-
 /**
  * What makes a project: its models, how they're trained, and what they're
  * trained on. Changing any of these starts a new project (fresh model, new
@@ -92,6 +75,23 @@ function trainingKey(c: Config): string {
 	]);
 }
 
+/** Copy `src` into the reactive `target`, touching only what changed, so the view updates in place. */
+function merge<T extends object>(target: T, src: T) {
+	for (const [key, value] of Object.entries(src)) {
+		const current = (target as Record<string, unknown>)[key];
+		if (value && typeof value === 'object' && current && typeof current === 'object' && Array.isArray(value) === Array.isArray(current)) {
+			merge(current, value);
+			if (Array.isArray(value)) (current as unknown[]).length = value.length;
+		} else if (current !== value) {
+			(target as Record<string, unknown>)[key] = value;
+		}
+	}
+}
+
+/**
+ * The app's training state. The models themselves live in a worker
+ * (engine/engine.worker.ts); this drives it and mirrors what it reports.
+ */
 class Runtime {
 	gpu = $state<'unknown' | 'ok' | 'missing'>('unknown');
 	loads = $state<LoadItem[]>([]);
@@ -117,30 +117,11 @@ class Runtime {
 	#projectId: number | null = null;
 	#policyRowId: number | null = null;
 
-	// GPU-backed objects must not be deep-proxied by Svelte, so they live in
-	// plain fields; `version` bumps whenever they change.
-	version = $state(0);
-	policyDef: ModelDef | null = null;
-	judgeDef: ModelDef | null = null;
-	policyTok: Tokenizer | null = null;
-	judgeTok: Tokenizer | null = null;
-	trainer: PolicyTrainer | null = null;
-	judgeModel: CompiledModel | null = null;
-	judgeWeights: Weights | null = null;
+	/** The model loaded in the worker. */
+	policyDef = $state<ModelDef | null>(null);
 	#loadedKey = '';
 	#promptOrder: number[] = [];
 	#promptCursor = 0;
-	#chatModel: CompiledModel | null = null;
-	/** Judge prompt prefixes (guidelines + question), prefilled once and reused every pass. */
-	#prefixes = new Map<string, JudgePrefix>();
-	/**
-	 * The original model's answer to each prompt ("GT"): its greedy, most
-	 * likely answer. The original never changes, so this is computed once per
-	 * prompt and is a steady yardstick (random samples from a 135M model are
-	 * often just wrong, e.g. "a tomato is a vegetable").
-	 */
-	#references = new Map<string, { answers: Answer[]; next: number }>();
-	#chatSaved: { id: string; side: ChatSide } | null = null;
 	#gpuTurn: Promise<unknown> = Promise.resolve();
 
 	get currentPass(): Pass | undefined {
@@ -148,20 +129,12 @@ class Runtime {
 	}
 
 	async initGpu(): Promise<boolean> {
-		if (this.gpu !== 'unknown') return this.gpu === 'ok';
-		const devices = await init('webgpu');
-		this.gpu = devices.includes('webgpu') ? 'ok' : 'missing';
-		if (this.gpu === 'ok') defaultDevice('webgpu');
+		if (this.gpu === 'unknown') this.gpu = (await engine('initGpu', undefined)) ? 'ok' : 'missing';
 		return this.gpu === 'ok';
 	}
 
 	get needsReload(): boolean {
 		return this.ready && this.#loadedKey !== trainingKey(config);
-	}
-
-	#track(label: string, total: number): LoadItem {
-		this.loads.push({ label, loaded: 0, total, downloaded: 0, done: false });
-		return this.loads[this.loads.length - 1];
 	}
 
 	/** Download (or read from cache) both models and set up a fresh trainer. */
@@ -170,51 +143,29 @@ class Runtime {
 		const key = trainingKey(config);
 		if (this.ready && key === this.#loadedKey) return;
 		this.loading = true;
+		this.ready = false;
 		this.error = null;
+		this.loads = [];
 		try {
 			if (!(await this.initGpu())) throw new Error('WebGPU is not available in this browser.');
 			await persistStorage();
-			// Keep the (3 GB) judge in memory if it hasn't changed; everything else restarts.
-			const keepJudge = this.judgeDef?.id === config.judgeId && !!this.judgeWeights;
-			this.#disposeAll(keepJudge);
-			this.loads = [];
-			const policyDef = getModel(config.policyId);
-			const judgeDef = getModel(config.judgeId);
-
-			this.status = 'Loading tokenizers…';
-			[this.policyTok, this.judgeTok] = await Promise.all([loadTokenizer(policyDef), loadTokenizer(judgeDef)]);
-
-			this.status = `Loading ${policyDef.label}…`;
-			const p = this.#track(`${policyDef.label} (trainee, f32)`, policyDef.downloadBytes);
-			const weights = await loadWeights(policyDef, np.float32, (x) => Object.assign(p, x));
-			p.done = true;
-			let base: Weights | null = null;
-			if (config.mode === 'full') {
-				// Full fine-tuning keeps an untouched copy for comparisons (read from cache).
-				const b = this.#track(`${policyDef.label} (frozen copy)`, policyDef.downloadBytes);
-				base = await loadWeights(policyDef, np.float32, (x) => Object.assign(b, x));
-				b.done = true;
-			}
-
-			if (!keepJudge) {
-				this.status = `Loading ${judgeDef.label}…`;
-				const j = this.#track(`${judgeDef.label} (judge, f16)`, judgeDef.downloadBytes);
-				this.judgeWeights = await loadWeights(judgeDef, np.float16, (x) => Object.assign(j, x));
-				j.done = true;
-				this.judgeModel = compileModel(judgeDef.config);
-			}
-
-			this.trainer = new PolicyTrainer(policyDef, weights, base, {
-				mode: config.mode,
-				learningRate: learningRate(config),
-				loraRank: config.loraRank,
-				loraAlpha: config.loraAlpha,
-				temperature: config.temperature,
-				microbatch: policyDef.config.hidden > 600 ? 4 : 8
-			});
-			this.policyDef = policyDef;
-			this.judgeDef = judgeDef;
-			this.#chatModel = this.trainer.model;
+			await engine(
+				'load',
+				{
+					policyId: config.policyId,
+					judgeId: config.judgeId,
+					mode: config.mode,
+					loraRank: config.loraRank,
+					loraAlpha: config.loraAlpha,
+					learningRate: learningRate(config),
+					temperature: config.temperature
+				},
+				(u) => {
+					if (u.status !== undefined) this.status = u.status;
+					if (u.loads) this.loads = u.loads;
+				}
+			);
+			this.policyDef = getModel(config.policyId);
 			this.passes = [];
 			this.viewing = null;
 			this.#promptOrder = [];
@@ -222,10 +173,9 @@ class Runtime {
 			this.sessionName = petname();
 			this.sessionId = newModelId(this.sessionName);
 			this.sessionCreatedAt = new Date().toISOString();
-			await this.#recordProject(policyDef.id, judgeDef.id);
+			await this.#recordProject(config.policyId, config.judgeId);
 			this.ready = true;
 			this.status = '';
-			this.version++;
 		} catch (e) {
 			console.error(e);
 			this.error = e instanceof Error ? e.message : String(e);
@@ -282,60 +232,8 @@ class Runtime {
 		}
 	}
 
-	async #prefixFor(question: string): Promise<JudgePrefix> {
-		const key = `${config.constitution}\u0000${question}`;
-		let prefix = this.#prefixes.get(key);
-		if (!prefix) {
-			prefix = await judgePrefix(this.judgeModel!, this.judgeWeights!, this.judgeTok!, this.judgeDef!.padToken, config.constitution, question);
-			this.#prefixes.set(key, prefix);
-			// Bounded: each prefix is ~10 MB of K/V for the 1.5B judge.
-			if (this.#prefixes.size > 24) {
-				const [oldest, old] = this.#prefixes.entries().next().value!;
-				tree.dispose(old.kv);
-				this.#prefixes.delete(oldest);
-			}
-		}
-		return prefix;
-	}
-
-	async #referenceFor(prompt: string, promptIds: number[]): Promise<Answer> {
-		const key = `${config.maxNew}\u0000${prompt}`;
-		let pool = this.#references.get(key);
-		if (!pool) {
-			const trainer = this.trainer!;
-			const def = this.policyDef!;
-			const tok = this.policyTok!;
-			const original = trainer.original();
-			const gen = await generate(trainer.model, original.weights, original.lora, promptIds, {
-				rows: 1,
-				maxNew: config.maxNew,
-				temperature: 0,
-				stopTokens: def.stopTokens,
-				padToken: def.padToken
-			});
-			pool = {
-				answers: gen.tokens.map((ids, i) => ({
-					tokens: ids,
-					text: tok.decodeText(ids),
-					stopped: gen.stopped[i],
-					pieces: tok.pieces(ids)
-				})),
-				next: 0
-			};
-			this.#references.set(key, pool);
-		}
-		const ref = pool.answers[pool.next++ % pool.answers.length];
-		// A fresh copy per pass: each pass writes its own verdict onto it.
-		return { ...ref, verdict: undefined };
-	}
-
-	#promptIds(prompt: string): number[] {
-		return this.policyTok!.encode(
-			chatPrompt([
-				{ role: 'system', content: this.policyDef!.defaultSystemPrompt },
-				{ role: 'user', content: prompt }
-			])
-		);
+	#saveTarget(id: string, name: string, createdAt: string) {
+		return { id, name, createdAt, passes: this.passes.length, constitution: config.constitution };
 	}
 
 	/** Sample a group of answers, judge them, and apply one GRPO update. */
@@ -349,170 +247,40 @@ class Runtime {
 		this.error = null;
 		try {
 			await this.load();
-			const trainer = this.trainer;
-			const def = this.policyDef;
-			if (!trainer || !def || !this.policyTok || !this.judgeModel || !this.judgeWeights || !this.judgeTok) return;
-			const tok = this.policyTok;
-			const G = config.groupSize;
-
+			if (!this.ready) return;
 			const prompt = this.#nextPrompt();
+			const index = this.passes.length;
 			this.passes.push({
-				index: this.passes.length,
+				index,
 				prompt,
 				phase: 'prefill',
-				answers: Array.from({ length: G }, () => ({ tokens: [], text: '', stopped: false, pieces: [] })),
+				answers: Array.from({ length: config.groupSize }, () => ({ tokens: [], text: '', stopped: false, pieces: [] })),
 				ms: {}
 			});
-			const pass = this.passes[this.passes.length - 1];
-			const promptIds = tok.encode(
-				chatPrompt([
-					{ role: 'system', content: def.defaultSystemPrompt },
-					{ role: 'user', content: prompt }
-				])
-			);
-
-			// Prefill: the prompt goes into the policy model while the judge prefills
-			// its own prompt for this question (cached after the first time). Then
-			// the answers sample in parallel, alongside the original model's answers.
-			this.status = `Pass ${pass.index + 1}: prefilling`;
-			let t = performance.now();
-			const compareMode = config.judgeMode === 'compare';
-			const judgeReady = compareMode ? this.#prefixFor(prompt) : Promise.resolve(null);
-			const referenceReady = compareMode ? this.#referenceFor(prompt, promptIds) : Promise.resolve(undefined);
-			const { weights, lora } = trainer.policy();
-			const genReady = generate(trainer.model, weights, lora, promptIds, {
-				rows: G,
-				maxNew: config.maxNew,
-				temperature: config.temperature,
-				stopTokens: def.stopTokens,
-				padToken: def.padToken,
-				onStep: (tokens, stopped) => {
-					if (pass.phase === 'prefill') {
-						pass.phase = 'sampling';
-						this.status = `Pass ${pass.index + 1}: sampling ${G} answers`;
-					}
-					tokens.forEach((ids, i) => {
-						const a = pass.answers[i];
-						if (a.tokens.length === ids.length) return;
-						a.tokens = [...ids];
-						a.text = tok.decodeText(ids);
-						a.stopped = stopped[i];
-					});
+			const pass = this.passes[index];
+			const done = await engine(
+				'runPass',
+				{
+					index,
+					prompt,
+					config: $state.snapshot(config),
+					save: { ...this.#saveTarget(this.sessionId, this.sessionName, this.sessionCreatedAt), passes: index + 1 }
+				},
+				(u) => {
+					if (u.status !== undefined) this.status = u.status;
+					if (u.pass) merge(pass, u.pass);
 				}
-			});
-			const [gen, prefix, reference] = await Promise.all([genReady, judgeReady, referenceReady]);
-			if (reference) pass.reference = reference;
-			gen.tokens.forEach((ids, i) => {
-				pass.answers[i].pieces = tok.pieces(ids);
-				pass.answers[i].stopped = gen.stopped[i];
-			});
-			pass.ms.sample = performance.now() - t;
-
-			pass.phase = 'judging';
-			t = performance.now();
-			// Presets with a rule check reward judge and rule together (averaged).
-			const rule = config.rule ? RULES[config.rule] : null;
-			const useJudge = true;
-			const ruleScores = pass.answers.map((a) => (rule ? rule.score(a.text, a.stopped) : 0));
-			let verdicts: Verdict[];
-			const withRule = (i: number, judged: number): Verdict =>
-				rule
-					? { score: (judged + ruleScores[i]) / 2, mass: 1, judge: judged, rule: ruleScores[i] }
-					: { score: judged, mass: 1, judge: judged };
-			if (useJudge && config.judgeMode === 'compare') {
-				const pairs: [number, number][] = [
-					...schedulePairs(G, Math.min(config.matchesPerAnswer, G - 1)),
-					...pass.answers.map((_, i) => [i, G] as [number, number])
-				];
-				pass.matches = [];
-				pass.matchesTotal = pairs.length;
-				this.status = `Pass ${pass.index + 1}: judge choosing between ${pairs.length} pairs`;
-				const texts = [...pass.answers.map((a) => a.text), pass.reference!.text];
-				const matches = await compareAnswers(
-					this.judgeModel,
-					this.judgeWeights,
-					this.judgeTok,
-					this.judgeDef!.padToken,
-					config.constitution,
-					prompt,
-					texts,
-					pairs,
-					{
-						bothOrders: config.bothOrders,
-						prefix: prefix ?? undefined,
-						onMatch: (m) => {
-						pass.matches!.push(m);
-						// Live standings: win rates over the matches played so far.
-						const rates = winRates(G + 1, pass.matches!);
-						pass.answers.forEach((a, i) => {
-							if (pass.matches!.some((x) => x.a === i || x.b === i)) a.verdict = withRule(i, rates[i]);
-						});
-						pass.reference!.verdict = { score: rates[G], mass: 1 };
-						}
-					}
-				);
-				const rates = winRates(G + 1, matches);
-				const vsRef = matches.filter((m) => m.b === G);
-				pass.vsOriginal = vsRef.reduce((s, m) => s + m.p, 0) / Math.max(1, vsRef.length);
-				pass.reference!.verdict = { score: rates[G], mass: 1 };
-				verdicts = rates.slice(0, G).map((r, i) => withRule(i, r));
-				verdicts.forEach((v, i) => (pass.answers[i].verdict = v));
-			} else if (useJudge) {
-				this.status = `Pass ${pass.index + 1}: judging`;
-				verdicts = await judgeAnswers(
-					this.judgeModel,
-					this.judgeWeights,
-					this.judgeTok,
-					this.judgeDef!.padToken,
-					config.constitution,
-					prompt,
-					pass.answers.map((a) => a.text),
-					(i, v) => {
-						pass.answers[i].verdict = rule
-							? { score: (v.score + ruleScores[i]) / 2, mass: v.mass, judge: v.score, rule: ruleScores[i] }
-							: v;
-					}
-				);
-				verdicts = pass.answers.map((a) => a.verdict!);
-			} else {
-				verdicts = ruleScores.map((r) => ({ score: r, mass: 1, rule: r }));
-				verdicts.forEach((v, i) => (pass.answers[i].verdict = v));
-			}
-			pass.ms.judge = performance.now() - t;
-			const scores = verdicts.map((v) => v.score);
-			pass.meanScore = scores.reduce((s, x) => s + x, 0) / scores.length;
-			pass.best = scores.indexOf(Math.max(...scores));
-
-			pass.phase = 'updating';
-			this.status = `Pass ${pass.index + 1}: updating weights`;
-			t = performance.now();
-			const res = await trainer.update(promptIds, gen.tokens, scores, def.padToken, config.klBeta);
-			res.advantages.forEach((adv, i) => {
-				const a = pass.answers[i];
-				a.advantage = adv;
-				a.logpBefore = res.logpBefore[i];
-				a.logpAfter = res.logpAfter[i];
-				a.logpRef = res.logpRef[i];
-				a.kl = res.kl[i];
-			});
-			pass.klBeta = config.klBeta;
-			if (!res.skipped) pass.kl = res.kl.reduce((s, x) => s + x, 0) / res.kl.length;
-			pass.loss = res.loss;
-			pass.skipped = res.skipped;
-			pass.layerNorms = await trainer.layerNorms();
-			pass.ms.update = performance.now() - t;
-			pass.phase = 'done';
-			await this.#autosave();
+			);
+			merge(pass, done);
 			if (this.#projectId !== null && this.#policyRowId !== null) {
 				await recordPass(this.#projectId, this.#policyRowId, pass.index, prompt, $state.snapshot(pass)).catch((e) =>
 					console.warn('Could not record the pass', e)
 				);
 			}
 			await this.refreshSaved();
-			this.status = res.skipped
-				? `Pass ${pass.index + 1}: all answers scored the same, so there was nothing to learn`
-				: `Pass ${pass.index + 1} done`;
-			this.version++;
+			this.status = pass.skipped
+				? `Pass ${index + 1}: all answers scored the same, so there was nothing to learn`
+				: `Pass ${index + 1} done`;
 		} catch (e) {
 			console.error(e);
 			this.error = e instanceof Error ? e.message : String(e);
@@ -568,36 +336,6 @@ class Runtime {
 		}
 	}
 
-	async #sessionBytes(): Promise<Uint8Array<ArrayBuffer>> {
-		const t = this.trainer!;
-		return writeSafetensors(t.lora ? await loraTensors(t.lora) : await weightTensors(t.weights), {
-			base_model: this.policyDef!.repo
-		});
-	}
-
-	/** Keep the current adapter (or weights) saved in the browser under the session's name. */
-	async #autosave() {
-		if (!this.trainer || !this.policyDef || !this.sessionId) return;
-		try {
-			await saveModel(
-				{
-					name: this.sessionName,
-					baseId: this.policyDef.id,
-					mode: this.trainer.settings.mode,
-					loraRank: this.trainer.settings.loraRank,
-					loraAlpha: this.trainer.settings.loraAlpha,
-					passes: this.passes.length,
-					constitution: config.constitution
-				},
-				await this.#sessionBytes(),
-				this.sessionId,
-				this.sessionCreatedAt
-			);
-		} catch (e) {
-			console.warn('Autosave failed', e);
-		}
-	}
-
 	async renameSession(name: string) {
 		this.sessionName = name;
 		if (this.#policyRowId !== null) await renameModel(this.#policyRowId, name).catch(() => {});
@@ -611,33 +349,22 @@ class Runtime {
 	}
 
 	async saveSession(name: string): Promise<SavedMeta> {
-		if (!this.trainer || !this.policyDef) throw new Error('Nothing to save yet.');
-		const meta = await saveModel(
-			{
-				name,
-				baseId: this.policyDef.id,
-				mode: this.trainer.settings.mode,
-				loraRank: this.trainer.settings.loraRank,
-				loraAlpha: this.trainer.settings.loraAlpha,
-				passes: this.passes.length,
-				constitution: config.constitution
-			},
-			await this.#sessionBytes()
-		);
+		const meta = await this.#exclusive(() => engine('save', this.#saveTarget('', name, '')));
 		await this.refreshSaved();
 		return meta;
 	}
 
 	async downloadSession() {
-		if (!this.trainer || !this.policyDef) return;
-		await this.#download(this.policyDef, this.trainer.settings.mode, this.trainer.settings, await this.#sessionBytes(), 'session');
+		if (!this.ready || !this.policyDef) return;
+		const bytes = await this.#exclusive(() => engine('sessionBytes', undefined));
+		this.#download(this.policyDef, config.mode, config, bytes, 'session');
 	}
 
 	async downloadSaved(meta: SavedMeta) {
-		await this.#download(getModel(meta.baseId), meta.mode, meta, await loadSavedWeights(meta.id), meta.id);
+		this.#download(getModel(meta.baseId), meta.mode, meta, await loadSavedWeights(meta.id), meta.id);
 	}
 
-	async #download(
+	#download(
 		def: ModelDef,
 		mode: 'lora' | 'full',
 		lora: { loraRank: number; loraAlpha: number },
@@ -659,70 +386,8 @@ class Runtime {
 	}
 
 	/**
-	 * Parameters for one side of the Test chat. `source` is 'session', a saved
-	 * model id, or 'original' (the untouched base of the given model).
-	 */
-	async #chatSide(source: string, baseId: string): Promise<{ def: ModelDef; tok: Tokenizer; side: ChatSide }> {
-		if (source === 'session') {
-			if (!this.trainer || !this.policyDef || !this.policyTok) throw new Error('No training session loaded.');
-			return { def: this.policyDef, tok: this.policyTok, side: this.trainer.policy() };
-		}
-		const def = getModel(baseId);
-		await this.#ensureChatBase(def);
-		const tok = this.policyTok!;
-		const original = this.trainer!.original();
-		if (source === 'original') return { def, tok, side: original };
-
-		if (this.#chatSaved?.id !== source) {
-			if (this.#chatSaved) {
-				const { weights, lora } = this.#chatSaved.side;
-				if (lora) tree.dispose(lora);
-				else tree.dispose(weights);
-			}
-			const meta = this.saved.find((m) => m.id === source);
-			if (!meta) throw new Error('Saved model not found.');
-			this.status = `Loading ${meta.name}…`;
-			const bytes = await loadSavedWeights(source);
-			const side =
-				meta.mode === 'lora'
-					? { weights: original.weights, lora: parseLora(bytes, def.config.layers) }
-					: { weights: parseWeights(bytes, def.config.layers), lora: null };
-			this.#chatSaved = { id: source, side };
-			this.status = '';
-		}
-		return { def, tok, side: this.#chatSaved.side };
-	}
-
-	/** Make sure the chat can run `def`: reuse the trainer's model, or load a bare one. */
-	async #ensureChatBase(def: ModelDef) {
-		if (this.policyDef?.id === def.id && this.trainer) return;
-		if (!(await this.initGpu())) throw new Error('WebGPU is not available in this browser.');
-		this.#disposeAll(true);
-		this.loads = [];
-		this.policyTok = await loadTokenizer(def);
-		const item = this.#track(`${def.label} (for chat)`, def.downloadBytes);
-		const weights = await loadWeights(def, np.float32, (x) => Object.assign(item, x));
-		item.done = true;
-		// A trainer with no passes is the simplest holder for "original" weights.
-		this.trainer = new PolicyTrainer(def, weights, null, {
-			mode: 'lora',
-			learningRate: 0,
-			loraRank: config.loraRank,
-			loraAlpha: config.loraAlpha,
-			temperature: config.temperature,
-			microbatch: 8
-		});
-		this.policyDef = def;
-		this.#chatModel = this.trainer.model;
-		this.#loadedKey = '';
-		this.ready = false;
-		this.version++;
-	}
-
-	/**
 	 * Answer the same conversation with two models at once. Sources are
 	 * 'original', 'session', or a saved model id, all on the base `baseId`.
-	 * Weights are resolved one side at a time, then both generate in parallel.
 	 */
 	async chatPair(
 		sources: [string, string],
@@ -733,55 +398,31 @@ class Runtime {
 		this.chatWaiting = this.running;
 		return this.#exclusive(async () => {
 			this.chatWaiting = false;
-			return this.#chatPair(sources, baseId, histories, onText);
+			if (!(await this.initGpu())) throw new Error('WebGPU is not available in this browser.');
+			const replies = await engine(
+				'chatPair',
+				{
+					sources,
+					baseId,
+					histories,
+					saved: $state.snapshot(this.saved),
+					loraRank: config.loraRank,
+					loraAlpha: config.loraAlpha
+				},
+				(u) => {
+					if (u.side !== undefined) onText(u.side, u.text!);
+					if (u.loads) this.loads = u.loads;
+					if (u.replaced) {
+						// The chat loaded a bare model in place of the training session.
+						this.policyDef = getModel(baseId);
+						this.#loadedKey = '';
+						this.ready = false;
+					}
+				}
+			);
+			replies.forEach((text, k) => onText(k as 0 | 1, text));
+			return replies;
 		});
-	}
-
-	async #chatPair(
-		sources: [string, string],
-		baseId: string,
-		histories: [ChatTurn[], ChatTurn[]],
-		onText: (side: 0 | 1, text: string) => void
-	): Promise<[string, string]> {
-		const sides: { def: ModelDef; tok: Tokenizer; side: ChatSide }[] = [];
-		for (const source of sources) sides.push(await this.#chatSide(source, baseId));
-		const run = async (k: 0 | 1) => {
-			const { def, tok, side } = sides[k];
-			const ids = tok.encode(chatPrompt([{ role: 'system', content: def.defaultSystemPrompt }, ...histories[k]]));
-			const gen = await generate(this.#chatModel!, side.weights, side.lora, ids, {
-				rows: 1,
-				maxNew: 160,
-				temperature: 0.7,
-				stopTokens: def.stopTokens,
-				padToken: def.padToken,
-				onStep: (tokens) => onText(k, tok.decodeText(tokens[0]))
-			});
-			return tok.decodeText(gen.tokens[0]);
-		};
-		return Promise.all([run(0), run(1)]) as Promise<[string, string]>;
-	}
-
-	#disposeAll(keepJudge = false) {
-		// Reference answers come from the old policy base; judge prefixes stay valid with the same judge.
-		this.#references.clear();
-		if (!keepJudge) {
-			for (const p of this.#prefixes.values()) tree.dispose(p.kv);
-			this.#prefixes.clear();
-		}
-		this.trainer?.dispose();
-		this.trainer = null;
-		if (!keepJudge) {
-			if (this.judgeWeights) tree.dispose(this.judgeWeights);
-			this.judgeWeights = null;
-			this.judgeModel = null;
-		}
-		if (this.#chatSaved) {
-			const { weights, lora } = this.#chatSaved.side;
-			if (lora) tree.dispose(lora);
-			else tree.dispose(weights);
-		}
-		this.#chatSaved = null;
-		this.ready = false;
 	}
 }
 

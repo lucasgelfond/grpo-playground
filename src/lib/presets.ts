@@ -201,3 +201,8 @@ Penalize: rambling, repeating itself, trailing off mid-sentence, invented facts,
 export const DEFAULT_TASK = TASKS.find((t) => t.id === 'yes-no')!;
 export const DEFAULT_PROMPTS = DEFAULT_TASK.prompts;
 export const DEFAULT_CONSTITUTION = DEFAULT_TASK.constitution;
+
+/** The gist of a judge prompt in one line: its preset's name, or its first line. */
+export function judgeSummary(constitution: string): string {
+	return TASKS.find((t) => t.constitution === constitution.trim())?.label ?? constitution.trim().split('\n')[0];
+}

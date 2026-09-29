@@ -6,7 +6,7 @@
 	import PassGraph from '$lib/components/PassGraph.svelte';
 	import { formatBytes, getModel } from '$lib/models/registry';
 	import { config } from '$lib/state/config.svelte';
-	import { TASKS } from '$lib/presets';
+	import { judgeSummary, TASKS } from '$lib/presets';
 	import { HEURISTICS } from '$lib/rl/rules';
 	import { runtime, type Pass } from '$lib/state/runtime.svelte';
 
@@ -229,7 +229,7 @@
 			name={runtime.sessionName || '…'}
 			createdAt={runtime.sessionCreatedAt}
 			judgePromptText={config.constitution}
-			judgePreset={TASKS.find((t) => t.constitution === config.constitution)?.label}
+			judgeSummary={judgeSummary(config.constitution)}
 			showReference={config.judgeMode === 'compare'}
 			onrename={(n) => runtime.renameSession(n)}
 		/>

@@ -2,12 +2,13 @@
 	import { onMount, tick } from 'svelte';
 
 	import { getModel, MODELS, type ChatTurn } from '$lib/models/registry';
+	import { judgeSummary } from '$lib/presets';
 	import type { SavedMeta } from '$lib/saved';
 	import { config } from '$lib/state/config.svelte';
 	import { runtime } from '$lib/state/runtime.svelte';
 
 	type Exchange = { user: string; replies: [string, string] };
-	type Option = { value: string; label: string; baseId: string };
+	type Option = { value: string; label: string; name: string; baseId: string };
 
 	let left = $state('');
 	let right = $state('');
@@ -23,16 +24,18 @@
 		...MODELS.filter((m) => m.id === 'smollm2-135m').map((m) => ({
 			value: `original:${m.id}`,
 			label: `${m.label} (original)`,
+			name: 'original',
 			baseId: m.id
 		})),
 		...(hasSession
-			? [{ value: 'session', label: `${runtime.sessionName} (training now)`, baseId: runtime.policyDef!.id }]
+			? [{ value: 'session', label: `${runtime.sessionName} (training now)`, name: runtime.sessionName, baseId: runtime.policyDef!.id }]
 			: []),
 		...runtime.saved
 			.filter((m) => !(hasSession && m.id === runtime.sessionId))
-			.map((m) => ({ value: `saved:${m.id}`, label: `${m.name} · ${m.passes} passes`, baseId: m.baseId }))
+			.map((m) => ({ value: `saved:${m.id}`, label: `${m.name} · ${m.passes} passes`, name: m.name, baseId: m.baseId }))
 	]);
 	const pick = (v: string) => options.find((o) => o.value === v);
+	const names = $derived([pick(left)?.name ?? '', pick(right)?.name ?? '']);
 	const mismatch = $derived(!!pick(left) && !!pick(right) && pick(left)!.baseId !== pick(right)!.baseId);
 
 	onMount(async () => {
@@ -106,9 +109,12 @@
 					<div class="ml-auto w-fit max-w-[80%] rounded-token bg-hover px-3 py-2">{ex.user}</div>
 					<div class="grid grid-cols-2 gap-3">
 						{#each ex.replies as reply, k (k)}
-							<div class="card min-h-12 p-3 text-[0.85rem] leading-relaxed whitespace-pre-wrap">
-								{reply ||
-									(busy && i === exchanges.length - 1 ? (runtime.chatWaiting ? 'waiting for the training pass to finish…' : '…') : '')}
+							<div class="card min-h-12 p-3 text-[0.85rem] leading-relaxed">
+								<div class="mb-1.5 font-terminal text-[0.7rem] {names[k] === 'original' ? 'text-ink-soft' : 'text-accent'}">
+									{names[k]}
+								</div>
+								<p class="whitespace-pre-wrap">{reply ||
+									(busy && i === exchanges.length - 1 ? (runtime.chatWaiting ? 'waiting for the training pass to finish…' : '…') : '')}</p>
 							</div>
 						{/each}
 					</div>
@@ -138,6 +144,9 @@
 			<div class="card flex items-center justify-between gap-2 px-3 py-2">
 				<div class="min-w-0">
 					<div class="truncate font-terminal text-[0.8rem]">{m.name}</div>
+					{#if m.constitution}
+						<div class="truncate text-[0.7rem] text-ink-soft" title={m.constitution}>judge: “{judgeSummary(m.constitution)}”</div>
+					{/if}
 					<div class="text-[0.7rem] text-ink-soft tabular-nums">
 						{getModel(m.baseId).params} · {m.passes} passes ·
 						{new Date(m.createdAt).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
