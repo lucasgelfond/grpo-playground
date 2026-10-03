@@ -163,7 +163,7 @@
 	}
 </script>
 
-<div bind:clientWidth={available} style:height="{(height + PAD * 2) * scale}px">
+<div bind:clientWidth={available} style:height="{(height + PAD * 2) * scale}px" data-phase={pass?.phase ?? 'idle'}>
 	<div
 		class="graph relative origin-top-left"
 		style:width="{width}px"
