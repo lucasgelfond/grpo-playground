@@ -44,5 +44,9 @@
 			</nav>
 		</header>
 		{@render children()}
+		<footer class="border-t border-gray-800 pt-6 text-xs text-gray-500">
+			Source <a href="https://github.com/lucasgelfond/grpo-playground" class="text-gray-300 underline hover:text-white">here</a>. Built by
+			<a href="https://lucasgelfond.online/" class="text-gray-300 underline hover:text-white">Lucas Gelfond</a> in New York City.
+		</footer>
 	</main>
 </div>

@@ -155,13 +155,3 @@ export async function deleteProjectOfModel(modelId: number) {
 	const pg = await getDb();
 	await pg.query(`DELETE FROM projects WHERE id = (SELECT project_id FROM models WHERE id = $1)`, [modelId]);
 }
-
-export type PassRow = { pass_index: number; prompt: string; data: unknown; created_at: string };
-
-export async function listPasses(projectId: number): Promise<PassRow[]> {
-	const pg = await getDb();
-	const { rows } = await pg.query<PassRow>(`SELECT pass_index, prompt, data, created_at FROM passes WHERE project_id = $1 ORDER BY pass_index`, [
-		projectId
-	]);
-	return rows;
-}
