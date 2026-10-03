@@ -51,7 +51,7 @@ Penalize wrong or made-up information most of all, then answers that do not end 
 		id: 'yes-no',
 		rule: 'yes-no',
 		label: 'Starts with yes or no',
-		constitution: `Answer every question with yes or no, prioritize brevity.
+		constitution: `Answer with yes or no, and prioritize brevity.
 Reward answers whose very first word is the CORRECT answer, "Yes" or "No", followed by at most one short sentence of explanation.
 Penalize wrong answers most of all, even if they start with Yes or No. Also penalize answers that do not start with Yes or No, and long answers.`,
 		// Facts a 1.5B judge reliably gets right (no trick questions like "is a

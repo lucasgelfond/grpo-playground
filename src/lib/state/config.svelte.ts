@@ -43,9 +43,8 @@ export const DEFAULT_CONFIG: Config = {
 	// Few answers per prompt keeps the judge cheap (a round robin of 4 is 6
 	// pairs): more prompts per minute beats a finer ranking of each group.
 	groupSize: 4,
-	// Hot, long-ish sampling: answers need room to finish and enough variety
-	// within each group for GRPO to have something to prefer.
-	maxNew: 256,
+	// Hot sampling: enough variety within each group for GRPO to have something to prefer.
+	maxNew: 128,
 	temperature: 1.0,
 	loraLearningRate: 3e-4,
 	fullLearningRate: 1e-5,
@@ -66,8 +65,8 @@ function load(): Config {
 			const saved = JSON.parse(raw);
 			// Settings saved before the smaller-group default: move them to 4 answers.
 			if (!('bothOrders' in saved)) saved.groupSize = DEFAULT_CONFIG.groupSize;
-			// Answers used to be cut off at 128 tokens; give them room to finish.
-			if ((saved.maxNew ?? 0) < 256) saved.maxNew = DEFAULT_CONFIG.maxNew;
+			// Answers are cut off at 128 tokens (it was 256 for a while).
+			saved.maxNew = DEFAULT_CONFIG.maxNew;
 			if (saved.judgeId !== DEFAULT_CONFIG.judgeId) saved.judgeId = DEFAULT_CONFIG.judgeId;
 			// Only the 135M model is offered for training for now.
 			if (saved.policyId !== DEFAULT_CONFIG.policyId) saved.policyId = DEFAULT_CONFIG.policyId;
