@@ -25,9 +25,9 @@
 	const ANGLE = '145deg';
 	const SOFTNESS = 14;
 	const done = $derived(fraction >= 1);
-	const fillMask = $derived(
-		done ? 'none' : `linear-gradient(${ANGLE}, #000 ${fraction * 100 - SOFTNESS}%, transparent ${fraction * 100 + SOFTNESS}%)`
-	);
+	// In 2% steps: the mask only changes (and the ring repaints) ~50 times per run, not every token.
+	const step = $derived(Math.round(fraction * 50) * 2);
+	const fillMask = $derived(done ? 'none' : `linear-gradient(${ANGLE}, #000 ${step - SOFTNESS}%, transparent ${step + SOFTNESS}%)`);
 	const reduced = typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 	// While a node is working its border breathes: fades up and back down with

@@ -134,7 +134,6 @@
 		return out.sort((a, b) => order[a.state] - order[b.state] + (a.strong ? 1 : 0) - (b.strong ? 1 : 0));
 	});
 
-	const uid = $props.id();
 	const judgeFraction = $derived(pass ? (pass.matches?.length ?? 0) / Math.max(1, pass.matchesTotal ?? 0) : 0);
 	const sampleFraction = $derived(
 		pass ? pass.answers.reduce((s, a) => s + (a.stopped ? 1 : a.tokens.length / maxNew), 0) / pass.answers.length : 0
@@ -185,22 +184,17 @@
 						e.state === 'done' && (e.strong ? 'stroke-accent' : 'stroke-accent/45')
 					]}
 				/>
+			{/each}
+		</svg>
+		<!--
+			Edges carrying work breathe like the nodes. They're drawn in their own
+			layer and only its opacity animates, so the compositor runs it without
+			repainting the graph (or touching the main thread) every frame.
+		-->
+		<svg class="flow pointer-events-none absolute inset-0 h-full w-full" aria-hidden="true">
+			{#each edges as e (e.key)}
 				{#if e.state === 'flowing'}
-					{@const length = e.x2 - e.x1}
-					<linearGradient id="{uid}-{e.key}" gradientUnits="userSpaceOnUse" x1={e.x1} y1={e.y} x2={e.x2} y2={e.y}>
-						<stop offset="0.25" style="stop-color: var(--color-accent); stop-opacity: 0" />
-						<stop offset="0.5" style="stop-color: var(--color-accent); stop-opacity: 1" />
-						<stop offset="0.6" style="stop-color: var(--color-accent); stop-opacity: 0" />
-						<animateTransform
-							attributeName="gradientTransform"
-							type="translate"
-							from="{-length * 0.6} 0"
-							to="{length * 0.8} 0"
-							dur="1.2s"
-							repeatCount="indefinite"
-						/>
-					</linearGradient>
-					<path d={e.path} fill="none" stroke="url(#{uid}-{e.key})" stroke-width="2" stroke-linecap="round" />
+					<path d={e.path} fill="none" stroke="var(--color-accent)" stroke-width="2" stroke-linecap="round" />
 				{/if}
 			{/each}
 		</svg>
@@ -306,8 +300,8 @@
 					<div class="mt-1 flex items-center gap-2">
 						<div class="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
 							<div
-								class="h-full rounded-full bg-gray-200 transition-[width] duration-500"
-								style:width="{(a?.verdict?.score ?? 0) * 100}%"
+								class="h-full origin-left rounded-full bg-gray-200 transition-transform duration-500"
+								style:transform="scaleX({a?.verdict?.score ?? 0})"
 							></div>
 						</div>
 						<span class="group/pct relative w-9 text-right text-[0.72rem] tabular-nums">
@@ -344,7 +338,7 @@
 				{#if judgeSummary}<div class="mt-0.5 line-clamp-2 text-[0.72rem] text-ink-soft">“{judgeSummary}”</div>{/if}
 				{#if pass?.phase === 'judging'}
 					<div class="mt-1.5 h-1.5 overflow-hidden rounded-full bg-muted">
-						<div class="h-full rounded-full bg-gray-200 transition-[width] duration-500" style:width="{judgeFraction * 100}%"></div>
+						<div class="h-full origin-left rounded-full bg-gray-200 transition-transform duration-500" style:transform="scaleX({judgeFraction})"></div>
 					</div>
 				{/if}
 			</GraphNode>
@@ -390,3 +384,24 @@
 		</div>
 	</div>
 </div>
+
+<style>
+	.flow {
+		will-change: opacity;
+		animation: flow 900ms ease-in-out infinite alternate;
+	}
+	@keyframes flow {
+		from {
+			opacity: 0.1;
+		}
+		to {
+			opacity: 0.8;
+		}
+	}
+	@media (prefers-reduced-motion: reduce) {
+		.flow {
+			animation: none;
+			opacity: 0.5;
+		}
+	}
+</style>
