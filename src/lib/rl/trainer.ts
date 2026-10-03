@@ -25,11 +25,8 @@ export type UpdateResult = {
 	/** Per-token log-probs of each completion before and after the update. */
 	logpBefore: number[][];
 	logpAfter: number[][];
-	/** Per-token log-probs under the original (reference) model. */
-	logpRef: number[][];
 	/** Mean per-token KL(π ‖ π_ref) of each answer, before the update. */
 	kl: number[];
-	ms: number;
 };
 
 /** Per-token KL estimate (k3), matching the loss: exp(r) - r - 1, r = ref - policy. */
@@ -180,14 +177,13 @@ export class PolicyTrainer {
 		padToken: number,
 		klBeta: number
 	): Promise<UpdateResult> {
-		const t0 = performance.now();
 		const G = completions.length;
 		const mean = rewards.reduce((s, r) => s + r, 0) / G;
 		const std = Math.sqrt(rewards.reduce((s, r) => s + (r - mean) ** 2, 0) / G);
 		const advantages = rewards.map((r) => (std > 1e-3 ? (r - mean) / (std + 1e-4) : 0));
 		const empty = completions.map((c) => c.map(() => 0));
 		if (std <= 1e-3 || completions.every((c) => c.length === 0)) {
-			return { skipped: true, advantages, loss: 0, logpBefore: empty, logpAfter: empty, logpRef: empty, kl: completions.map(() => 0), ms: 0 };
+			return { skipped: true, advantages, loss: 0, logpBefore: empty, logpAfter: empty, kl: completions.map(() => 0) };
 		}
 
 		const P = bucket(promptIds.length, PROMPT_BUCKET);
@@ -275,7 +271,7 @@ export class PolicyTrainer {
 		const kl = logpBefore.map((lps, g) =>
 			lps.length ? lps.reduce((s, lp, i) => s + klPerToken(lp, logpRef[g][i]), 0) / lps.length : 0
 		);
-		return { skipped: false, advantages, loss, logpBefore, logpAfter, logpRef, kl, ms: performance.now() - t0 };
+		return { skipped: false, advantages, loss, logpBefore, logpAfter, kl };
 	}
 
 	/** How far each adapted matrix has moved from the original: [layer][target] Frobenius norm. */

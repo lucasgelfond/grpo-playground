@@ -20,9 +20,6 @@ export type Answer = {
 	advantage?: number;
 	logpBefore?: number[];
 	logpAfter?: number[];
-	logpRef?: number[];
-	/** Mean per-token KL from the original model, before this pass's update. */
-	kl?: number;
 };
 
 export type Pass = {
@@ -38,19 +35,18 @@ export type Pass = {
 	kl?: number;
 	klBeta?: number;
 	/**
-	 * Compare mode: one answer from the untouched original model, entered into
+	 * One answer from the untouched original model, entered into
 	 * the matches (as index answers.length) but never trained on. How often the
 	 * trained model's answers beat it is the pass's absolute progress measure.
 	 */
 	reference?: Answer;
 	/** Mean P(a trained answer beats the original model's answer). */
 	vsOriginal?: number;
-	/** Compare mode: every head-to-head choice the judge made, and how many were scheduled. */
+	/** Every head-to-head choice the judge made, and how many were scheduled. */
 	matches?: Match[];
 	matchesTotal?: number;
 	/** [layer][target] ||ΔW|| from the original weights, after this pass. */
 	layerNorms?: number[][];
-	ms: { sample?: number; judge?: number; update?: number };
 };
 
 export type LoadItem = { label: string; loaded: number; total: number; downloaded: number; done: boolean };
@@ -254,8 +250,7 @@ class Runtime {
 				index,
 				prompt,
 				phase: 'prefill',
-				answers: Array.from({ length: config.groupSize }, () => ({ tokens: [], text: '', stopped: false, pieces: [] })),
-				ms: {}
+				answers: Array.from({ length: config.groupSize }, () => ({ tokens: [], text: '', stopped: false, pieces: [] }))
 			});
 			const pass = this.passes[index];
 			const done = await engine(

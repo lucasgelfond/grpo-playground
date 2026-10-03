@@ -15,16 +15,10 @@ export type Config = {
 	constitution: string;
 	/** Rule check for the loaded task preset, if it has one. */
 	rule: RuleId | null;
-	/** Training algorithm. Only GRPO is built so far (see TODO.md). */
-	method: 'grpo' | 'ppo' | 'dpo';
-	/** How the judge rewards answers: choose between pairs, or score each alone. */
-	judgeMode: 'compare' | 'score';
-	/** In compare mode, how many head-to-head matches each answer plays per pass. */
+	/** How many head-to-head matches each answer plays per pass. */
 	matchesPerAnswer: number;
 	/** Ask every pair in both A/B orders (2× judge cost) instead of one random order. */
 	bothOrders: boolean;
-	/** Where the reward comes from: the judge, the rule check, or their average. */
-	rewardSource: 'judge' | 'rule' | 'both';
 	groupSize: number;
 	maxNew: number;
 	temperature: number;
@@ -44,16 +38,13 @@ export const DEFAULT_CONFIG: Config = {
 	promptOrder: 'shuffle',
 	constitution: DEFAULT_TASK.constitution,
 	rule: DEFAULT_TASK.rule ?? null,
-	method: 'grpo',
-	judgeMode: 'compare',
 	matchesPerAnswer: 3,
 	bothOrders: false,
-	rewardSource: 'judge',
 	// Few answers per prompt keeps the judge cheap (a round robin of 4 is 6
 	// pairs): more prompts per minute beats a finer ranking of each group.
 	groupSize: 4,
 	// Hot, long-ish sampling: answers need room to finish and enough variety
-	// within each group of 8 for GRPO to have something to prefer.
+	// within each group for GRPO to have something to prefer.
 	maxNew: 256,
 	temperature: 1.0,
 	loraLearningRate: 3e-4,
@@ -75,8 +66,6 @@ function load(): Config {
 			const saved = JSON.parse(raw);
 			// Settings saved before the smaller-group default: move them to 4 answers.
 			if (!('bothOrders' in saved)) saved.groupSize = DEFAULT_CONFIG.groupSize;
-			// Choosing between answers is the only judge mode now, and it needs the 1.5B judge.
-			saved.judgeMode = 'compare';
 			// Answers used to be cut off at 128 tokens; give them room to finish.
 			if ((saved.maxNew ?? 0) < 256) saved.maxNew = DEFAULT_CONFIG.maxNew;
 			if (saved.judgeId === 'qwen2.5-0.5b') saved.judgeId = DEFAULT_CONFIG.judgeId;

@@ -12,7 +12,7 @@ import { chatPrompt, getModel, type ChatTurn, type ModelDef } from '$lib/models/
 import { loadTokenizer, type Tokenizer } from '$lib/models/tokenizer';
 import { downloadWeights, isCached, loadWeights, type LoadProgress, type Weights } from '$lib/models/weights';
 import { generate } from '$lib/rl/generate';
-import { compareAnswers, judgeAnswers, judgePrefix, schedulePairs, winRates, type JudgePrefix, type Verdict } from '$lib/rl/judge';
+import { compareAnswers, judgePrefix, schedulePairs, winRates, type JudgePrefix, type Verdict } from '$lib/rl/judge';
 import { RULES } from '$lib/rl/rules';
 import { PolicyTrainer } from '$lib/rl/trainer';
 import { loadSavedWeights, saveModel, type SavedMeta } from '$lib/saved';
@@ -65,7 +65,7 @@ export class Engine {
 	 * prompt and is a steady yardstick (random samples from a 135M model are
 	 * often just wrong, e.g. "a tomato is a vegetable").
 	 */
-	#references = new Map<string, { answers: Answer[]; next: number }>();
+	#references = new Map<string, Answer>();
 	#chatSaved: { id: string; side: ChatSide } | null = null;
 
 	async initGpu(): Promise<boolean> {
@@ -155,8 +155,8 @@ export class Engine {
 
 	async #referenceFor(prompt: string, promptIds: number[], maxNew: number): Promise<Answer> {
 		const key = `${maxNew}\u0000${prompt}`;
-		let pool = this.#references.get(key);
-		if (!pool) {
+		let ref = this.#references.get(key);
+		if (!ref) {
 			const trainer = this.#trainer!;
 			const def = this.#policyDef!;
 			const tok = this.#policyTok!;
@@ -168,18 +168,10 @@ export class Engine {
 				stopTokens: def.stopTokens,
 				padToken: def.padToken
 			});
-			pool = {
-				answers: gen.tokens.map((ids, i) => ({
-					tokens: ids,
-					text: tok.decodeText(ids),
-					stopped: gen.stopped[i],
-					pieces: tok.pieces(ids)
-				})),
-				next: 0
-			};
-			this.#references.set(key, pool);
+			const ids = gen.tokens[0];
+			ref = { tokens: ids, text: tok.decodeText(ids), stopped: gen.stopped[0], pieces: tok.pieces(ids) };
+			this.#references.set(key, ref);
 		}
-		const ref = pool.answers[pool.next++ % pool.answers.length];
 		// A fresh copy per pass: each pass writes its own verdict onto it.
 		return { ...ref, verdict: undefined };
 	}
@@ -201,8 +193,7 @@ export class Engine {
 			index,
 			prompt,
 			phase: 'prefill',
-			answers: Array.from({ length: G }, () => ({ tokens: [], text: '', stopped: false, pieces: [] })),
-			ms: {}
+			answers: Array.from({ length: G }, () => ({ tokens: [], text: '', stopped: false, pieces: [] }))
 		};
 		const sync = throttled(() => progress({ pass }));
 		const status = (s: string) => progress({ status: s });
@@ -217,10 +208,8 @@ export class Engine {
 		// its own prompt for this question (cached after the first time). Then
 		// the answers sample in parallel, alongside the original model's answers.
 		status(`Pass ${index + 1}: prefilling`);
-		let t = performance.now();
-		const compareMode = config.judgeMode === 'compare';
-		const judgeReady = compareMode ? this.#prefixFor(config.constitution, prompt) : Promise.resolve(null);
-		const referenceReady = compareMode ? this.#referenceFor(prompt, promptIds, config.maxNew) : Promise.resolve(undefined);
+		const judgeReady = this.#prefixFor(config.constitution, prompt);
+		const referenceReady = this.#referenceFor(prompt, promptIds, config.maxNew);
 		const { weights, lora } = trainer.policy();
 		const genReady = generate(trainer.model, weights, lora, promptIds, {
 			rows: G,
@@ -244,83 +233,57 @@ export class Engine {
 			}
 		});
 		const [gen, prefix, reference] = await Promise.all([genReady, judgeReady, referenceReady]);
-		if (reference) pass.reference = reference;
+		pass.reference = reference;
 		gen.tokens.forEach((ids, i) => {
 			pass.answers[i].pieces = tok.pieces(ids);
 			pass.answers[i].stopped = gen.stopped[i];
 		});
-		pass.ms.sample = performance.now() - t;
 
 		pass.phase = 'judging';
 		sync();
-		t = performance.now();
 		// Presets with a rule check reward judge and rule together (averaged).
 		const rule = config.rule ? RULES[config.rule] : null;
-		const ruleScores = pass.answers.map((a) => (rule ? rule.score(a.text, a.stopped) : 0));
-		let verdicts: Verdict[];
-		const withRule = (i: number, judged: number): Verdict =>
-			rule
-				? { score: (judged + ruleScores[i]) / 2, mass: 1, judge: judged, rule: ruleScores[i] }
-				: { score: judged, mass: 1, judge: judged };
-		if (compareMode) {
-			const pairs: [number, number][] = [
-				...schedulePairs(G, Math.min(config.matchesPerAnswer, G - 1)),
-				...pass.answers.map((_, i) => [i, G] as [number, number])
-			];
-			pass.matches = [];
-			pass.matchesTotal = pairs.length;
-			status(`Pass ${index + 1}: judge choosing between ${pairs.length} pairs`);
-			const texts = [...pass.answers.map((a) => a.text), pass.reference!.text];
-			const matches = await compareAnswers(
-				this.#judgeModel,
-				this.#judgeWeights,
-				this.#judgeTok,
-				this.#judgeDef!.padToken,
-				config.constitution,
-				prompt,
-				texts,
-				pairs,
-				{
-					bothOrders: config.bothOrders,
-					prefix: prefix ?? undefined,
-					onMatch: (m) => {
-						pass.matches!.push(m);
-						// Live standings: win rates over the matches played so far.
-						const rates = winRates(G + 1, pass.matches!);
-						pass.answers.forEach((a, i) => {
-							if (pass.matches!.some((x) => x.a === i || x.b === i)) a.verdict = withRule(i, rates[i]);
-						});
-						pass.reference!.verdict = { score: rates[G], mass: 1 };
-						sync();
-					}
-				}
-			);
-			const rates = winRates(G + 1, matches);
-			const vsRef = matches.filter((m) => m.b === G);
-			pass.vsOriginal = vsRef.reduce((s, m) => s + m.p, 0) / Math.max(1, vsRef.length);
-			pass.reference!.verdict = { score: rates[G], mass: 1 };
-			verdicts = rates.slice(0, G).map((r, i) => withRule(i, r));
-			verdicts.forEach((v, i) => (pass.answers[i].verdict = v));
-		} else {
-			status(`Pass ${index + 1}: judging`);
-			await judgeAnswers(
-				this.#judgeModel,
-				this.#judgeWeights,
-				this.#judgeTok,
-				this.#judgeDef!.padToken,
-				config.constitution,
-				prompt,
-				pass.answers.map((a) => a.text),
-				(i, v) => {
-					pass.answers[i].verdict = rule
-						? { score: (v.score + ruleScores[i]) / 2, mass: v.mass, judge: v.score, rule: ruleScores[i] }
-						: v;
+		const reward = (i: number, judged: number): Verdict => ({
+			score: rule ? (judged + rule(pass.answers[i].text, pass.answers[i].stopped)) / 2 : judged
+		});
+		// Every pair of answers, plus each answer against the original model's.
+		const pairs: [number, number][] = [
+			...schedulePairs(G, Math.min(config.matchesPerAnswer, G - 1)),
+			...pass.answers.map((_, i) => [i, G] as [number, number])
+		];
+		pass.matches = [];
+		pass.matchesTotal = pairs.length;
+		status(`Pass ${index + 1}: judge choosing between ${pairs.length} pairs`);
+		const matches = await compareAnswers(
+			this.#judgeModel,
+			this.#judgeWeights,
+			this.#judgeTok,
+			this.#judgeDef!.padToken,
+			config.constitution,
+			prompt,
+			[...pass.answers.map((a) => a.text), reference.text],
+			pairs,
+			{
+				bothOrders: config.bothOrders,
+				prefix,
+				onMatch: (m) => {
+					pass.matches!.push(m);
+					// Live standings: win rates over the matches played so far.
+					const rates = winRates(G + 1, pass.matches!);
+					pass.answers.forEach((a, i) => {
+						if (pass.matches!.some((x) => x.a === i || x.b === i)) a.verdict = reward(i, rates[i]);
+					});
+					reference.verdict = { score: rates[G] };
 					sync();
 				}
-			);
-			verdicts = pass.answers.map((a) => a.verdict!);
-		}
-		pass.ms.judge = performance.now() - t;
+			}
+		);
+		const rates = winRates(G + 1, matches);
+		const vsRef = matches.filter((m) => m.b === G);
+		pass.vsOriginal = vsRef.reduce((s, m) => s + m.p, 0) / Math.max(1, vsRef.length);
+		reference.verdict = { score: rates[G] };
+		const verdicts = rates.slice(0, G).map((r, i) => reward(i, r));
+		verdicts.forEach((v, i) => (pass.answers[i].verdict = v));
 		const scores = verdicts.map((v) => v.score);
 		pass.meanScore = scores.reduce((s, x) => s + x, 0) / scores.length;
 		pass.best = scores.indexOf(Math.max(...scores));
@@ -328,22 +291,18 @@ export class Engine {
 		pass.phase = 'updating';
 		sync();
 		status(`Pass ${index + 1}: updating weights`);
-		t = performance.now();
 		const res = await trainer.update(promptIds, gen.tokens, scores, def.padToken, config.klBeta);
 		res.advantages.forEach((adv, i) => {
 			const a = pass.answers[i];
 			a.advantage = adv;
 			a.logpBefore = res.logpBefore[i];
 			a.logpAfter = res.logpAfter[i];
-			a.logpRef = res.logpRef[i];
-			a.kl = res.kl[i];
 		});
 		pass.klBeta = config.klBeta;
 		if (!res.skipped) pass.kl = res.kl.reduce((s, x) => s + x, 0) / res.kl.length;
 		pass.loss = res.loss;
 		pass.skipped = res.skipped;
 		pass.layerNorms = await trainer.layerNorms();
-		pass.ms.update = performance.now() - t;
 		pass.phase = 'done';
 		await this.save(input.save).catch((e) => console.warn('Autosave failed', e));
 		return pass;

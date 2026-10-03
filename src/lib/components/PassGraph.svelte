@@ -15,7 +15,6 @@
 		createdAt,
 		judgePromptText,
 		judgeSummary,
-		showReference,
 		onrename
 	}: {
 		pass: Pass | undefined;
@@ -37,8 +36,6 @@
 		judgePromptText: string;
 		/** The judge prompt in one line, e.g. "Starts with yes or no". */
 		judgeSummary: string;
-		/** Reserve a row for the original model's answer (GT) from the start. */
-		showReference: boolean;
 		onrename: (name: string) => void;
 	} = $props();
 
@@ -75,8 +72,8 @@
 	const UPDATE_W = 180;
 	const GAP = 48;
 	const ROW = 84;
-	// The original model's answer (compare mode) gets an extra row at the bottom.
-	const rows = $derived((pass?.answers.length ?? groupSize) + (showReference || pass?.reference ? 1 : 0));
+	// The original model's answer (GT) gets an extra row at the bottom.
+	const rows = $derived((pass?.answers.length ?? groupSize) + 1);
 	const G = $derived(pass?.answers.length ?? groupSize);
 	const height = $derived(rows * ROW);
 	const xPrompt = PAD;
@@ -138,14 +135,7 @@
 	});
 
 	const uid = $props.id();
-	const compare = $derived(pass?.matchesTotal !== undefined);
-	const judgeFraction = $derived(
-		!pass
-			? 0
-			: compare
-				? (pass.matches?.length ?? 0) / Math.max(1, pass.matchesTotal!)
-				: pass.answers.filter((a) => a.verdict).length / pass.answers.length
-	);
+	const judgeFraction = $derived(pass ? (pass.matches?.length ?? 0) / Math.max(1, pass.matchesTotal ?? 0) : 0);
 	const sampleFraction = $derived(
 		pass ? pass.answers.reduce((s, a) => s + (a.stopped ? 1 : a.tokens.length / maxNew), 0) / pass.answers.length : 0
 	);
@@ -352,7 +342,7 @@
 				<div class="label">judge{pass?.phase === 'prefill' ? ' · prefilling' : ''}</div>
 				<div class="mt-1 text-[0.82rem] font-medium">{judgeLabel}</div>
 				{#if judgeSummary}<div class="mt-0.5 line-clamp-2 text-[0.72rem] text-ink-soft">“{judgeSummary}”</div>{/if}
-				{#if pass?.phase === 'judging' && compare}
+				{#if pass?.phase === 'judging'}
 					<div class="mt-1.5 h-1.5 overflow-hidden rounded-full bg-muted">
 						<div class="h-full rounded-full bg-gray-200 transition-[width] duration-500" style:width="{judgeFraction * 100}%"></div>
 					</div>

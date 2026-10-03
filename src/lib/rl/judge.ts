@@ -1,102 +1,27 @@
 import { numpy as np, tree } from '@jax-js/jax';
 
 import type { CompiledModel, KV } from '../models/llama';
-import { chatPrompt } from '../models/registry';
 import type { Tokenizer } from '../models/tokenizer';
 import type { Weights } from '../models/weights';
 import { bucket, leftPad } from './generate';
 
-/**
- * The judge never writes text. We show it the constitution, the question and
- * one answer, ask "does the answer follow the guidelines? Yes or No", and
- * read its next-token probabilities for "Yes" and "No". The reward is
- * P(Yes) renormalized over the two, which costs one forward pass.
- *
- * We A/B tested this against asking for a 0-9 digit: small judges rank
- * answers far more cleanly as a yes/no question (P(yes) of 1.00 / 0.73 / 0.10
- * / 0.00 for good / ok / rambling / broken answers, vs. muddled digit scores).
- */
-
-export const JUDGE_SYSTEM = 'You grade AI answers against guidelines.';
-
-export function judgePrompt(constitution: string, question: string, answer: string): string {
-	return chatPrompt([
-		{ role: 'system', content: JUDGE_SYSTEM },
-		{
-			role: 'user',
-			content:
-				`GUIDELINES:\n${constitution.trim()}\n\nQUESTION:\n${question.trim()}\n\n` +
-				`ANSWER:\n${answer.trim() || '(empty)'}\n\n` +
-				'Does the ANSWER follow the GUIDELINES well? Reply with only Yes or No.'
-		}
-	]);
-}
-
-export type Verdict = {
-	/** P(Yes) renormalized over {Yes, No}: the reward, in [0, 1]. */
-	score: number;
-	/** Total probability the judge put on "Yes" or "No" at all (sanity check). */
-	mass: number;
-	/** When the reward mixes sources, the parts it came from. */
-	judge?: number;
-	rule?: number;
-};
+/** An answer's reward, in [0, 1]. */
+export type Verdict = { score: number };
 
 const JUDGE_BUCKET = 64;
-/** Rows per judge forward pass; bounds attention/MLP activation memory. */
-const JUDGE_BATCH = 4;
 
-export async function judgeAnswers(
-	model: CompiledModel,
-	weights: Weights,
-	tok: Tokenizer,
-	padToken: number,
-	constitution: string,
-	question: string,
-	answers: string[],
-	onVerdict?: (index: number, verdict: Verdict) => void
-): Promise<Verdict[]> {
-	const [yesId, noId] = [tok.encode('Yes')[0], tok.encode('No')[0]];
-	const encoded = answers.map((a) => tok.encode(judgePrompt(constitution, question, a)));
-	const verdicts: Verdict[] = [];
-
-	for (let start = 0; start < encoded.length; start += JUDGE_BATCH) {
-		const chunk = encoded.slice(start, start + JUDGE_BATCH);
-		const T = bucket(Math.max(...chunk.map((ids) => ids.length)), JUDGE_BUCKET);
-		const rows = chunk.map((ids) => leftPad(ids, T, padToken));
-		const ids = np.array(new Int32Array(rows.flatMap((r) => r.row)), {
-			shape: [chunk.length, T],
-			dtype: np.int32
-		});
-		const pad = np.array(new Int32Array(rows.map((r) => r.pad)), { dtype: np.int32 });
-		const logits = model.lastLogits(tree.ref(weights), null, ids, pad);
-		const data = (await logits.data()) as Float32Array;
-		const V = data.length / chunk.length;
-
-		for (let b = 0; b < chunk.length; b++) {
-			const row = data.subarray(b * V, (b + 1) * V);
-			let max = -Infinity;
-			for (let i = 0; i < V; i++) if (row[i] > max) max = row[i];
-			let total = 0;
-			for (let i = 0; i < V; i++) total += Math.exp(row[i] - max);
-			const yes = Math.exp(row[yesId] - max) / total;
-			const no = Math.exp(row[noId] - max) / total;
-			const verdict = { score: yes / (yes + no), mass: yes + no };
-			verdicts.push(verdict);
-			onVerdict?.(start + b, verdict);
-		}
-	}
-	return verdicts;
-}
-
-// --- Choosing between answers ---------------------------------------------------------
-//
-// Pairwise judging is sharper than scoring one answer at a time (92% vs a 0.68
-// AUC on our test sets with Qwen2.5 1.5B). Small judges lean toward whichever
-// answer comes first: ask each pair in a random order (bias cancels on
-// average) or, more expensively, in both orders and average.
-// The instructions, guidelines and question are the same for every pair, so
-// they're prefilled once and each comparison only pays for its two answers.
+/*
+ * The judge never writes text. It sees the guidelines, the question and two
+ * answers, is asked "which follows the guidelines better? A or B", and we read
+ * its next-token logits for "A" and "B": P(A) = sigmoid(logit A − logit B).
+ *
+ * Pairwise judging is sharper than scoring one answer at a time (92% vs a 0.68
+ * AUC on our test sets with Qwen2.5 1.5B). Small judges lean toward whichever
+ * answer comes first: ask each pair in a random order (bias cancels on
+ * average) or, more expensively, in both orders and average.
+ * The instructions, guidelines and question are the same for every pair, so
+ * they're prefilled once and each comparison only pays for its two answers.
+ */
 
 export const COMPARE_SYSTEM = 'You compare AI answers against guidelines.';
 

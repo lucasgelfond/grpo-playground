@@ -7,7 +7,7 @@
 	import { formatBytes, getModel } from '$lib/models/registry';
 	import { config } from '$lib/state/config.svelte';
 	import { judgeSummary, TASKS } from '$lib/presets';
-	import { HEURISTICS } from '$lib/rl/rules';
+	import { CHECKS } from '$lib/rl/rules';
 	import { runtime, type Pass } from '$lib/state/runtime.svelte';
 
 	let gridView = $state<'total' | 'pass'>('total');
@@ -87,24 +87,8 @@
 			format: (v) => v.toFixed(2)
 		}
 	});
-	const CHECK_LABELS: Record<string, string> = {
-		markdown: 'Lists / markdown presence',
-		question: 'Ends with question',
-		'yes-no': 'Starts with Yes/No',
-		'one-sentence': 'One sentence'
-	};
-	const CHECKS = HEURISTICS.filter((h) => h.id in CHECK_LABELS).map((h) => ({ ...h, label: CHECK_LABELS[h.id] }));
 	/** The answer check matching the selected preset's goal, if any. */
-	const RULE_CHECK: Record<string, string> = {
-		'follow-up': 'question',
-		'yes-no': 'yes-no',
-		'plain-prose': 'markdown',
-		brevity: 'one-sentence'
-	};
-	const presetCheck = $derived.by(() => {
-		const task = TASKS.find((t) => t.constitution === config.constitution);
-		return task?.rule ? RULE_CHECK[task.rule] : undefined;
-	});
+	const presetCheck = $derived(TASKS.find((t) => t.constitution === config.constitution)?.rule);
 	/** Share of a pass's answers passing a heuristic check. */
 	const share = (p: Pass, test: (t: string, f: boolean) => boolean) =>
 		p.answers.filter((a) => test(a.text, a.stopped)).length / p.answers.length;
@@ -230,7 +214,6 @@
 			createdAt={runtime.sessionCreatedAt}
 			judgePromptText={config.constitution}
 			judgeSummary={judgeSummary(config.constitution)}
-			showReference={config.judgeMode === 'compare'}
 			onrename={(n) => runtime.renameSession(n)}
 		/>
 	</section>
