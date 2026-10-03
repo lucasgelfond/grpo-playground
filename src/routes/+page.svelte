@@ -10,7 +10,8 @@
 	// Just the small model for now: fast passes and room beside the judge.
 	const trainees = MODELS.filter((m) => m.id === 'smollm2-135m');
 	// Choosing between answers needs a 1.5B+ judge; the 0.5B nearly always picks the first answer.
-	const judges = MODELS.filter((m) => m.judge && m.id !== 'qwen2.5-0.5b');
+	// Qwen3 1.7B works (weights are mirrored) but is hidden for now: Qwen2.5 1.5B is smaller and faster.
+	const judges = MODELS.filter((m) => m.id === 'qwen2.5-1.5b');
 
 	onMount(() => {
 		deviceMemory = (navigator as Navigator & { deviceMemory?: number }).deviceMemory;

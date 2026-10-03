@@ -68,7 +68,7 @@ function load(): Config {
 			if (!('bothOrders' in saved)) saved.groupSize = DEFAULT_CONFIG.groupSize;
 			// Answers used to be cut off at 128 tokens; give them room to finish.
 			if ((saved.maxNew ?? 0) < 256) saved.maxNew = DEFAULT_CONFIG.maxNew;
-			if (saved.judgeId === 'qwen2.5-0.5b') saved.judgeId = DEFAULT_CONFIG.judgeId;
+			if (saved.judgeId !== DEFAULT_CONFIG.judgeId) saved.judgeId = DEFAULT_CONFIG.judgeId;
 			// Only the 135M model is offered for training for now.
 			if (saved.policyId !== DEFAULT_CONFIG.policyId) saved.policyId = DEFAULT_CONFIG.policyId;
 			return { ...DEFAULT_CONFIG, ...saved };
