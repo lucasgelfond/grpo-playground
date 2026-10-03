@@ -156,7 +156,7 @@ export const MODELS: ModelDef[] = [
 		label: 'Qwen3 1.7B',
 		repo: 'Qwen/Qwen3-1.7B',
 		params: '1.7B',
-		downloadBytes: 4_063_479_808,
+		downloadBytes: 4_063_515_528,
 		config: {
 			hidden: 2048,
 			layers: 28,
