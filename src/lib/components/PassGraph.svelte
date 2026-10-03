@@ -13,7 +13,6 @@
 		method,
 		name,
 		createdAt,
-		judgePromptText,
 		judgeSummary,
 		onrename
 	}: {
@@ -32,8 +31,6 @@
 		name: string;
 		/** When this model was created (ISO), shown under its name. */
 		createdAt: string;
-		/** The judge's guidelines, shown when hovering the judge. */
-		judgePromptText: string;
 		/** The judge prompt in one line, e.g. "Starts with yes or no". */
 		judgeSummary: string;
 		onrename: (name: string) => void;
@@ -329,19 +326,11 @@
 		{/each}
 
 		<!-- Judge -->
-		<div class="group absolute -translate-y-1/2" style:left="{xJudge}px" style:top="{midY}px">
-			<div
-				class="pointer-events-none absolute top-full left-0 z-20 mt-2 hidden max-h-[22rem] w-80 overflow-hidden rounded border border-gray-700 bg-gray-900 p-3 text-[15.6px] leading-relaxed whitespace-pre-wrap text-gray-300 shadow-xl group-hover:block"
-			>{judgePromptText}</div>
+		<div class="absolute -translate-y-1/2" style:left="{xJudge}px" style:top="{midY}px">
 			<GraphNode width={JUDGE_W} fraction={judgeFraction} live={pass?.phase === 'judging' || pass?.phase === 'prefill'}>
 				<div class="label">judge{pass?.phase === 'prefill' ? ' · prefilling' : ''}</div>
 				<div class="mt-1 text-[1.17rem] font-medium">{judgeLabel}</div>
 				{#if judgeSummary}<div class="mt-0.5 text-[1.04rem] text-ink-soft">“{judgeSummary}”</div>{/if}
-				{#if pass?.phase === 'judging'}
-					<div class="mt-1.5 h-1.5 overflow-hidden rounded-full bg-muted">
-						<div class="h-full origin-left rounded-full bg-gray-200 transition-transform duration-500" style:transform="scaleX({judgeFraction})"></div>
-					</div>
-				{/if}
 			</GraphNode>
 		</div>
 

@@ -212,7 +212,6 @@
 			method={config.mode === 'lora' ? 'LoRA' : 'Whole model'}
 			name={runtime.sessionName || '…'}
 			createdAt={runtime.sessionCreatedAt}
-			judgePromptText={config.constitution}
 			judgeSummary={config.constitution.trim().split('\n')[0]}
 			onrename={(n) => runtime.renameSession(n)}
 		/>
