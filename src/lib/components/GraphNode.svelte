@@ -4,6 +4,7 @@
 
 	const {
 		width,
+		height,
 		fraction = 0,
 		live = false,
 		highlight = false,
@@ -12,6 +13,8 @@
 		children
 	}: {
 		width: number;
+		/** Fixed height (px), so stacked nodes tile exactly; content is laid out top to bottom. */
+		height?: number;
 		/** 0-1 progress, drawn as an accent ring that closes when done. */
 		fraction?: number;
 		live?: boolean;
@@ -57,9 +60,11 @@
 		'relative block rounded-token hairline bg-panel px-3 py-2 text-left transition-opacity',
 		'border-rule-strong',
 		dim && 'opacity-55',
+		height && 'flex flex-col',
 		onclick && 'hover:bg-hover'
 	]}
 	style:width="{width}px"
+	style:height={height ? `${height}px` : undefined}
 >
 	{#if fraction > 0 || live}
 		<div class="pointer-events-none absolute -inset-px" style:mask-image={fillMask} aria-hidden="true">
