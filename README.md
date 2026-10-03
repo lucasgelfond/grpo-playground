@@ -1,4 +1,7 @@
 Language model RL fine-tuning, completely in the browser. This repo:
+
+![demo](docs/demo.gif)
+
 - downloads a small model (SmolLM2 135M) and a slightly larger "judge" model (Qwen 2.5 1.5B)
 - lets you set "questions" to ask the model and a "judge prompt"
 - generates inference on the small model four times (w/ KV cache pre-fill for efficiency), and then simply uses the A/B logits (a la Jev) to choose the best answer
