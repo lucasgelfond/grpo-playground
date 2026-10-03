@@ -6,6 +6,8 @@
  *
  *   End with a question   22% -> 82% (rule), 57% -> 86% (rule + judge)
  *   Yes or no first       85% -> 100%, but collapses to "Yes." for everything
+ *                         (since rebalanced to half yes / half no, and the
+ *                         judge now checks the answer is right; not re-measured)
  *   No lists or markdown  11% -> 51%, prose gets less coherent
  *   One sentence, Admit what it can't know: rarely happen at all, so little signal
  */
@@ -20,7 +22,8 @@ export const TASKS: Task[] = [
 		label: 'End with a question',
 		constitution: `Reward answers that give one or two helpful sentences and then end with a short, friendly follow-up question to the user.
 The very last character must be "?".
-Penalize answers that do not end with a question, and answers longer than three sentences.`,
+The sentences before the question must be correct and sensible.
+Penalize wrong or made-up information most of all, then answers that do not end with a question, and answers longer than three sentences.`,
 		prompts: [
 			'I want to get into hiking.',
 			"I'm thinking about learning guitar.",
@@ -48,38 +51,50 @@ Penalize answers that do not end with a question, and answers longer than three 
 		id: 'yes-no',
 		rule: 'yes-no',
 		label: 'Starts with yes or no',
-		constitution: `Every question can be answered yes or no.
-Reward answers whose very first word is "Yes" or "No", followed by at most one short sentence of explanation.
-Penalize answers that do not start with Yes or No, and long answers.`,
+		constitution: `Every question has an obvious answer: yes or no.
+Reward answers whose very first word is the CORRECT answer, "Yes" or "No", followed by at most one short sentence of explanation.
+Penalize wrong answers most of all, even if they start with Yes or No. Also penalize answers that do not start with Yes or No, and long answers.`,
+		// Facts a 1.5B judge reliably gets right (no trick questions like "is a
+		// tomato a fruit?"), alternating yes and no so "Yes." to everything loses.
 		prompts: [
+			'Answer yes or no: Is the sun hot?',
+			'Answer yes or no: Can a cow fly?',
+			'Answer yes or no: Is ice cold?',
+			'Answer yes or no: Is the sky green?',
+			'Answer yes or no: Do birds have feathers?',
+			'Answer yes or no: Is fire cold?',
+			'Answer yes or no: Do bees make honey?',
+			'Answer yes or no: Is a rock alive?',
+			'Answer yes or no: Is snow white?',
+			'Answer yes or no: Do fish live in trees?',
+			'Answer yes or no: Is the ocean salty?',
+			'Answer yes or no: Is the moon made of cheese?',
+			'Answer yes or no: Do plants need water?',
+			'Answer yes or no: Can humans breathe underwater?',
+			'Answer yes or no: Is the Earth round?',
+			'Answer yes or no: Are bananas blue?',
+			'Answer yes or no: Do cats have four legs?',
+			'Answer yes or no: Is two plus two five?',
 			'Answer yes or no: Is the sun a star?',
 			'Answer yes or no: Can penguins fly?',
-			'Answer yes or no: Do fish sleep?',
-			'Answer yes or no: Is a tomato a fruit?',
-			'Answer yes or no: Can you see the Great Wall of China from space?',
-			'Answer yes or no: Do plants need sunlight?',
-			'Answer yes or no: Is chocolate bad for dogs?',
-			'Answer yes or no: Is the Earth round?',
-			'Answer yes or no: Can humans breathe underwater?',
-			'Answer yes or no: Is Pluto a planet?',
-			'Answer yes or no: Do spiders have six legs?',
-			'Answer yes or no: Is it safe to eat raw chicken?',
-			'Answer yes or no: Does the moon have gravity?',
-			'Answer yes or no: Are bats blind?',
-			'Answer yes or no: Can lightning strike the same place twice?',
-			'Answer yes or no: Do cats like water?',
-			'Answer yes or no: Is the ocean salty?',
-			'Answer yes or no: Can dogs see color?',
-			'Answer yes or no: Is ice lighter than water?',
-			'Answer yes or no: Do bees make honey?'
+			'Answer yes or no: Is milk white?',
+			'Answer yes or no: Can a fish ride a bike?',
+			'Answer yes or no: Do dogs bark?',
+			'Answer yes or no: Is grass purple?',
+			'Answer yes or no: Is the night sky dark?',
+			'Answer yes or no: Do trees have wheels?',
+			'Answer yes or no: Is a week seven days long?',
+			'Answer yes or no: Can a person live on the sun?',
+			'Answer yes or no: Do cars need fuel or electricity to run?',
+			'Answer yes or no: Is a mouse bigger than an elephant?'
 		]
 	},
 	{
 		id: 'plain-prose',
 		rule: 'plain-prose',
 		label: 'No lists or markdown',
-		constitution: `Reward answers written as one short paragraph of plain prose.
-Penalize any formatting: bullet points, numbered lists, "Step 1" style steps, headings, or bold text with **.`,
+		constitution: `Reward answers written as one short paragraph of plain prose that gives correct, sensible instructions.
+Penalize wrong or unsafe advice most of all, then any formatting: bullet points, numbered lists, "Step 1" style steps, headings, or bold text with **.`,
 		prompts: [
 			'How do I make a paper airplane?',
 			'How do I start running?',
@@ -108,7 +123,8 @@ Penalize any formatting: bullet points, numbered lists, "Step 1" style steps, he
 		rule: 'brevity',
 		label: 'One sentence',
 		constitution: `Reward answers that are ONE short sentence (under 25 words) that directly answers the question.
-Penalize answers longer than one sentence, lists, headings, and answers that trail off unfinished.`,
+The sentence must be correct.
+Penalize wrong facts most of all, then answers longer than one sentence, lists, headings, and answers that trail off unfinished.`,
 		prompts: [
 			'Explain how the internet works.',
 			'Tell me about the Roman Empire.',
@@ -138,7 +154,7 @@ Penalize answers longer than one sentence, lists, headings, and answers that tra
 		label: 'Admit what it can’t know',
 		constitution: `These questions ask about things an AI cannot know: the user's private life, the future, or made-up things.
 Reward answers that clearly say "I don't know" or explain that it can't know, in one or two sentences.
-Penalize answers that invent a specific answer.`,
+Penalize answers that invent a specific answer most of all, since any specific answer is a made-up one.`,
 		prompts: [
 			'What did I eat for breakfast today?',
 			"What is my dog's name?",
@@ -166,13 +182,13 @@ Penalize answers that invent a specific answer.`,
 		id: 'general',
 		label: 'Concise & kind',
 		constitution: `Reward answers that:
-1. Answer the question directly in the first sentence.
+1. Answer the question directly and correctly in the first sentence.
 2. Are short: 1-3 sentences. Shorter wins if nothing important is lost.
 3. Are warm and friendly, but never gushing or flattering.
 4. Say "I'm not sure" rather than making things up.
 5. Use plain words a 10-year-old would understand.
 
-Penalize: rambling, repeating itself, trailing off mid-sentence, invented facts, and ignoring the question.`,
+Penalize wrong facts most of all, then: rambling, repeating itself, trailing off mid-sentence, invented facts, and ignoring the question.`,
 		prompts: [
 			'Why is the sky blue?',
 			'How do I boil an egg?',
