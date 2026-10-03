@@ -1,6 +1,9 @@
-Language model RL fine-tuning, completely in the browser. This repo:
+Language model RL fine-tuning, completely in the browser. 
 
 ![demo](docs/demo.gif)
+
+
+This repo:
 
 - downloads a small model (SmolLM2 135M) and a slightly larger "judge" model (Qwen 2.5 1.5B)
 - lets you set "questions" to ask the model and a "judge prompt"
