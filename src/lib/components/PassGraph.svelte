@@ -64,14 +64,14 @@
 
 	// Fixed geometry, so edges are arithmetic rather than measurement (as in Lacuna's graph.ts).
 	const PAD = 16;
-	const PROMPT_W = 190;
-	const MODEL_W = 180;
-	const ANSWER_W = 340;
-	const JUDGE_W = 170;
-	const RANK_W = 210;
-	const UPDATE_W = 180;
+	const PROMPT_W = 215;
+	const MODEL_W = 205;
+	const ANSWER_W = 390;
+	const JUDGE_W = 195;
+	const RANK_W = 240;
+	const UPDATE_W = 205;
 	const GAP = 48;
-	const ROW = 84;
+	const ROW = 96;
 	// The original model's answer (GT) gets an extra row at the bottom.
 	const rows = $derived((pass?.answers.length ?? groupSize) + 1);
 	const G = $derived(pass?.answers.length ?? groupSize);
@@ -165,7 +165,7 @@
 
 <div bind:clientWidth={available} style:height="{(height + PAD * 2) * scale}px">
 	<div
-		class="relative origin-top-left"
+		class="graph relative origin-top-left"
 		style:width="{width}px"
 		style:margin-left="{Math.max(0, (available - width * scale) / 2)}px"
 		style:height="{height + PAD * 2}px"
@@ -203,7 +203,7 @@
 		<div class="absolute -translate-y-1/2" style:left="{xPrompt}px" style:top="{midY}px">
 			<GraphNode width={PROMPT_W} fraction={pass ? 1 : 0}>
 				<div class="label">prompt {pass ? `· pass ${pass.index + 1}` : ''}</div>
-				<div class="mt-1 text-[0.85rem] leading-snug font-medium">{pass?.prompt ?? 'Press Step to run the first pass'}</div>
+				<div class="mt-1 text-[0.98rem] leading-snug font-medium">{pass?.prompt ?? 'Press Step to run the first pass'}</div>
 			</GraphNode>
 		</div>
 
@@ -212,22 +212,22 @@
 			<GraphNode width={MODEL_W} fraction={pass ? 1 : 0} live={pass?.phase === 'prefill' || pass?.phase === 'updating'}>
 				<div class="label">policy model{pass?.phase === 'prefill' ? ' · prefilling' : pass?.phase === 'sampling' ? ' · sampling' : ''}</div>
 				<input
-					class="mt-1 w-full rounded-[0.25rem] bg-transparent font-terminal text-[0.82rem] font-medium outline-none focus:bg-hover"
+					class="mt-1 w-full rounded-[0.25rem] bg-transparent font-terminal text-[0.94rem] font-medium outline-none focus:bg-hover"
 					value={name}
 					aria-label="Model name"
 					onchange={(e) => onrename(e.currentTarget.value.trim() || name)}
 				/>
-				<div class="mt-0.5 text-[0.72rem] text-ink-soft">{modelLabel}</div>
-				<div class="text-[0.72rem] text-ink-soft">{method}</div>
+				<div class="mt-0.5 text-[0.83rem] text-ink-soft">{modelLabel}</div>
+				<div class="text-[0.83rem] text-ink-soft">{method}</div>
 				{#if createdAt}
-					<div class="text-[0.68rem] text-ink-soft tabular-nums">
+					<div class="text-[0.78rem] text-ink-soft tabular-nums">
 						{new Date(createdAt).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
 					</div>
 				{/if}
 			</GraphNode>
 			{#if pass?.layerNorms}
 				<div
-					class="pointer-events-none absolute top-full left-0 z-10 mt-2 hidden w-56 card p-2.5 text-[0.75rem] tabular-nums shadow-lg group-hover:block"
+					class="pointer-events-none absolute top-full left-0 z-10 mt-2 hidden w-56 card p-2.5 text-[0.86rem] tabular-nums shadow-lg group-hover:block"
 				>
 					<div class="label mb-1">After pass {pass.index + 1}</div>
 					<div class="flex justify-between"><span class="text-ink-soft">size of change ‖ΔW‖</span>{totalChange?.toFixed(2)}</div>
@@ -257,10 +257,10 @@
 				{#if expanded === i && a?.text}
 					<!-- The full answer, opened over the answers below this one. -->
 					<div
-						class="absolute top-0 left-0 z-20 max-h-[28rem] overflow-y-auto rounded border border-blue-500 bg-gray-900 p-3 text-[0.8rem] leading-relaxed whitespace-pre-wrap shadow-xl"
+						class="absolute top-0 left-0 z-20 max-h-[28rem] overflow-y-auto rounded border border-blue-500 bg-gray-900 p-3 text-[0.92rem] leading-relaxed whitespace-pre-wrap shadow-xl"
 						style:width="{ANSWER_W}px"
 					>
-						<div class="mb-1.5 flex justify-between text-[0.72rem] text-gray-500">
+						<div class="mb-1.5 flex justify-between text-[0.83rem] text-gray-500">
 							<span>{nameOf(i)} · {a.tokens.length} tokens</span><span>click to close</span>
 						</div>
 						{a.text}
@@ -273,9 +273,9 @@
 					highlight={isBest}
 					dim={isRef}
 				>
-					<div class="flex items-center gap-2 text-[0.72rem] text-ink-soft">
+					<div class="flex items-center gap-2 text-[0.83rem] text-ink-soft">
 						<span class="font-medium tabular-nums">{isRef ? 'GT · original model, not trained' : letter(i)}</span>
-						{#if isBest}<span class="rounded bg-blue-900/50 px-1 text-[10px] text-blue-300">chosen</span>{/if}
+						{#if isBest}<span class="rounded bg-blue-900/50 px-1 text-[11.5px] text-blue-300">chosen</span>{/if}
 						<span class="ml-auto tabular-nums">
 							{#if a?.advantage !== undefined && !pass?.skipped}
 								<span class={a.advantage > 0 ? 'text-up' : a.advantage < 0 ? 'text-down' : ''}>
@@ -286,7 +286,7 @@
 						</span>
 					</div>
 					{@const sh = isRef ? null : shifts(a)}
-					<div class="mt-0.5 line-clamp-2 h-[2.5em] text-[0.8rem] leading-[1.25em]">
+					<div class="mt-0.5 line-clamp-2 h-[2.5em] text-[0.92rem] leading-[1.25em]">
 						{#if sh && a}
 							{#each a.pieces as piece, t (t)}<span
 									class={['rounded-[2px]', (t === sh.up || t === sh.down) && 'font-semibold ring-1 ring-current']}
@@ -304,7 +304,7 @@
 								style:transform="scaleX({a?.verdict?.score ?? 0})"
 							></div>
 						</div>
-						<span class="group/pct relative w-9 text-right text-[0.72rem] tabular-nums">
+						<span class="group/pct relative w-9 text-right text-[0.83rem] tabular-nums">
 							{pct(a?.verdict?.score)}
 							{#if matchesOf(i).length}
 								<!-- How this answer did in each of its matches. -->
@@ -330,12 +330,12 @@
 		<!-- Judge -->
 		<div class="group absolute -translate-y-1/2" style:left="{xJudge}px" style:top="{midY}px">
 			<div
-				class="pointer-events-none absolute top-full left-0 z-20 mt-2 hidden max-h-[22rem] w-80 overflow-hidden rounded border border-gray-700 bg-gray-900 p-3 text-[11px] leading-relaxed whitespace-pre-wrap text-gray-300 shadow-xl group-hover:block"
+				class="pointer-events-none absolute top-full left-0 z-20 mt-2 hidden max-h-[22rem] w-80 overflow-hidden rounded border border-gray-700 bg-gray-900 p-3 text-[12.5px] leading-relaxed whitespace-pre-wrap text-gray-300 shadow-xl group-hover:block"
 			>{judgePromptText}</div>
 			<GraphNode width={JUDGE_W} fraction={judgeFraction} live={pass?.phase === 'judging' || pass?.phase === 'prefill'}>
 				<div class="label">judge{pass?.phase === 'prefill' ? ' · prefilling' : ''}</div>
-				<div class="mt-1 text-[0.82rem] font-medium">{judgeLabel}</div>
-				{#if judgeSummary}<div class="mt-0.5 line-clamp-2 text-[0.72rem] text-ink-soft">“{judgeSummary}”</div>{/if}
+				<div class="mt-1 text-[0.94rem] font-medium">{judgeLabel}</div>
+				{#if judgeSummary}<div class="mt-0.5 line-clamp-2 text-[0.83rem] text-ink-soft">“{judgeSummary}”</div>{/if}
 				{#if pass?.phase === 'judging'}
 					<div class="mt-1.5 h-1.5 overflow-hidden rounded-full bg-muted">
 						<div class="h-full origin-left rounded-full bg-gray-200 transition-transform duration-500" style:transform="scaleX({judgeFraction})"></div>
@@ -348,7 +348,7 @@
 		<div class="absolute -translate-y-1/2" style:left="{xRank}px" style:top="{midY}px">
 			<GraphNode width={RANK_W} fraction={pass ? ranking.length / pass.answers.length : 0} live={pass?.phase === 'judging'}>
 				<div class="label">ranking</div>
-				<ol class="mt-1.5 space-y-0.5 text-[0.75rem] tabular-nums">
+				<ol class="mt-1.5 space-y-0.5 text-[0.86rem] tabular-nums">
 					{#each ranking as r, rank (r.i)}
 						<li class="grid grid-cols-[1.1rem_1.9rem_1fr_2.2rem] items-center gap-1.5">
 							<span class="text-ink-soft">{rank + 1}</span>
@@ -370,7 +370,7 @@
 		<div class="absolute -translate-y-1/2" style:left="{xUpdate}px" style:top="{midY}px">
 			<GraphNode width={UPDATE_W} fraction={phaseIndex >= 3 ? 1 : 0} live={pass?.phase === 'updating'}>
 				<div class="label">grpo update</div>
-				<div class="mt-1 text-[0.8rem] tabular-nums">
+				<div class="mt-1 text-[0.92rem] tabular-nums">
 					{#if pushed}
 						<div><span class="text-up">↑</span> {pushed.up.map(letter).join(' ')}</div>
 						<div><span class="text-down">↓</span> {pushed.down.map(letter).join(' ')}</div>
@@ -386,6 +386,10 @@
 </div>
 
 <style>
+	/* Node labels ("judge", "ranking", …) a step up from the page's small type. */
+	.graph :global(.label) {
+		font-size: 0.86rem;
+	}
 	.flow {
 		will-change: opacity;
 		animation: flow 900ms ease-in-out infinite alternate;

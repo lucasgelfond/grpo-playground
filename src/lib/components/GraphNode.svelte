@@ -63,6 +63,8 @@
 >
 	{#if fraction > 0 || live}
 		<div class="pointer-events-none absolute -inset-px" style:mask-image={fillMask} aria-hidden="true">
+			<!-- While working, the panel fills with color as well as the ring, so progress reads at a glance. -->
+			{#if live || fraction < 1}<div class="absolute inset-0 rounded-token bg-accent/20"></div>{/if}
 			<div class="absolute inset-0 rounded-token border-2 border-accent/35"></div>
 			<div class={['absolute inset-0 rounded-token border-accent', highlight ? 'border-[3px]' : 'border-2']}></div>
 		</div>
