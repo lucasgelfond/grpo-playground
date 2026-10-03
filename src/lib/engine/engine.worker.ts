@@ -35,7 +35,7 @@ export type PassUpdate = { status?: string; pass?: Pass };
 /** Where the session autosaves after each pass. */
 export type SaveTarget = { name: string; id: string; createdAt: string; passes: number; constitution: string };
 
-/** Posts at most one pass snapshot per frame, however often the pass changes. */
+/** Posts at most ~30 pass snapshots a second, however often the pass changes. */
 function throttled(post: () => void): () => void {
 	let pending = false;
 	return () => {
@@ -44,7 +44,7 @@ function throttled(post: () => void): () => void {
 		setTimeout(() => {
 			pending = false;
 			post();
-		}, 16);
+		}, 33);
 	};
 }
 
