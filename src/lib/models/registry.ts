@@ -1,7 +1,8 @@
 /**
- * The models this app knows how to load. All four are Llama-style decoders
+ * The models this app knows how to load. All are Llama-style decoders
  * (RMSNorm, RoPE, SwiGLU MLP, grouped-query attention, tied embeddings) that
- * differ only in shapes, rope base, and whether q/k/v have biases (Qwen2).
+ * differ only in shapes, rope base, whether q/k/v have biases (Qwen2), and
+ * whether q and k are RMS-normalized per head (Qwen3).
  */
 
 export type ModelConfig = {
@@ -15,6 +16,8 @@ export type ModelConfig = {
 	ropeTheta: number;
 	rmsEps: number;
 	qkvBias: boolean;
+	/** RMSNorm on each head of q and k before RoPE (Qwen3). */
+	qkNorm?: boolean;
 };
 
 export type TokenizerKind = 'smollm2' | 'qwen2';
@@ -29,6 +32,8 @@ export type ModelDef = {
 	config: ModelConfig;
 	tokenizer: TokenizerKind;
 	defaultSystemPrompt: string;
+	/** Opens every assistant turn, e.g. Qwen3's empty think block. */
+	assistantPrefix?: string;
 	/** Token ids that end an assistant turn. */
 	stopTokens: number[];
 	/** Token id used to right-pad finished sequences. */
@@ -145,6 +150,35 @@ export const MODELS: ModelDef[] = [
 		trainable: false,
 		fullFinetune: 'no',
 		judge: true
+	},
+	{
+		id: 'qwen3-1.7b',
+		label: 'Qwen3 1.7B',
+		repo: 'Qwen/Qwen3-1.7B',
+		params: '1.7B',
+		downloadBytes: 4_063_479_808,
+		config: {
+			hidden: 2048,
+			layers: 28,
+			heads: 16,
+			kvHeads: 8,
+			headDim: 128,
+			intermediate: 6144,
+			vocab: 151936,
+			ropeTheta: 1_000_000,
+			rmsEps: 1e-6,
+			qkvBias: false,
+			qkNorm: true
+		},
+		tokenizer: 'qwen2',
+		defaultSystemPrompt: 'You are a helpful assistant.',
+		// Qwen3 thinks before answering unless its turn opens with an empty think block.
+		assistantPrefix: '<think>\n\n</think>\n\n',
+		stopTokens: [151645, 151643],
+		padToken: 151643,
+		trainable: false,
+		fullFinetune: 'no',
+		judge: true
 	}
 ];
 
@@ -167,11 +201,11 @@ export function modelUrl(def: ModelDef, file: string): string {
 
 export type ChatTurn = { role: 'system' | 'user' | 'assistant'; content: string };
 
-/** ChatML, shared by SmolLM2 and Qwen2.5. Ends with an open assistant turn. */
-export function chatPrompt(turns: ChatTurn[]): string {
+/** ChatML, shared by SmolLM2 and Qwen. Ends with an open assistant turn. */
+export function chatPrompt(turns: ChatTurn[], assistantPrefix = ''): string {
 	let text = '';
 	for (const t of turns) text += `<|im_start|>${t.role}\n${t.content}<|im_end|>\n`;
-	return text + '<|im_start|>assistant\n';
+	return text + '<|im_start|>assistant\n' + assistantPrefix;
 }
 
 export function formatBytes(n: number): string {

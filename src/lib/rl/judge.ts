@@ -32,16 +32,12 @@ function comparePrefix(constitution: string, question: string): string {
 	);
 }
 
-function compareSuffix(a: string, b: string): string {
+function compareSuffix(a: string, b: string, assistantPrefix: string): string {
 	return (
 		`ANSWER A:\n${a.trim() || '(empty)'}\n\nANSWER B:\n${b.trim() || '(empty)'}\n\n` +
-		'Which answer follows the GUIDELINES better? Reply with only A or B.<|im_end|>\n<|im_start|>assistant\n'
+		'Which answer follows the GUIDELINES better? Reply with only A or B.<|im_end|>\n<|im_start|>assistant\n' +
+		assistantPrefix
 	);
-}
-
-/** The full text the judge sees for one ordering of a pair (for display). */
-export function comparePrompt(constitution: string, question: string, a: string, b: string): string {
-	return comparePrefix(constitution, question) + compareSuffix(a, b);
 }
 
 export type Match = {
@@ -120,6 +116,8 @@ export async function compareAnswers(
 	pairs: [number, number][],
 	opts: {
 		bothOrders: boolean;
+		/** Opens the judge's turn, e.g. Qwen3's empty think block. */
+		assistantPrefix?: string;
 		onMatch?: (match: Match) => void;
 		/** A cached prefix for this question (kept by the caller), else one is built and freed. */
 		prefix?: JudgePrefix;
@@ -135,7 +133,11 @@ export async function compareAnswers(
 	const orders: boolean[][] = pairs.map(() => (opts.bothOrders ? [true, false] : [Math.random() < 0.5]));
 	const rows = pairs.flatMap(([i, j], k) =>
 		orders[k].map((aFirst) =>
-			tok.encode(aFirst ? compareSuffix(answers[i], answers[j]) : compareSuffix(answers[j], answers[i]))
+			tok.encode(
+				aFirst
+					? compareSuffix(answers[i], answers[j], opts.assistantPrefix ?? '')
+					: compareSuffix(answers[j], answers[i], opts.assistantPrefix ?? '')
+			)
 		)
 	);
 	const rowsBefore = orders.map((_, k) => orders.slice(0, k).reduce((s, o) => s + o.length, 0));

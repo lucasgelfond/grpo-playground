@@ -143,8 +143,8 @@ export class Engine {
 		if (!prefix) {
 			prefix = await judgePrefix(this.#judgeModel!, this.#judgeWeights!, this.#judgeTok!, this.#judgeDef!.padToken, constitution, question);
 			this.#prefixes.set(key, prefix);
-			// Bounded: each prefix is ~10 MB of K/V for the 1.5B judge.
-			if (this.#prefixes.size > 24) {
+			// Bounded: each prefix is ~10 MB of K/V for Qwen2.5 1.5B, ~40 MB for Qwen3 1.7B.
+			if (this.#prefixes.size > 8) {
 				const [oldest, old] = this.#prefixes.entries().next().value!;
 				tree.dispose(old.kv);
 				this.#prefixes.delete(oldest);
@@ -265,6 +265,7 @@ export class Engine {
 			pairs,
 			{
 				bothOrders: config.bothOrders,
+				assistantPrefix: this.#judgeDef!.assistantPrefix,
 				prefix,
 				onMatch: (m) => {
 					pass.matches!.push(m);

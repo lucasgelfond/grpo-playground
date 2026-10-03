@@ -9,7 +9,7 @@
 
 	// Just the small model for now: fast passes and room beside the judge.
 	const trainees = MODELS.filter((m) => m.id === 'smollm2-135m');
-	// Choosing between answers needs the 1.5B judge; the 0.5B nearly always picks the first answer.
+	// Choosing between answers needs a 1.5B+ judge; the 0.5B nearly always picks the first answer.
 	const judges = MODELS.filter((m) => m.judge && m.id !== 'qwen2.5-0.5b');
 
 	onMount(() => {

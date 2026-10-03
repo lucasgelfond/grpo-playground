@@ -4,11 +4,11 @@ import type { ModelConfig } from './registry';
 import type { Layer, Linear, Weights } from './weights';
 
 /**
- * A Llama-style decoder (SmolLM2 / Qwen2.5) written against jax-js, plus the
+ * A Llama-style decoder (SmolLM2 / Qwen2.5 / Qwen3) written against jax-js, plus the
  * three compiled entry points the app needs:
  *
  * - `prefill` / `decode`: batched KV-cache generation for sampling answers.
- * - `lastLogits`: one forward pass returning next-token logits (the judge).
+ * - `extend`: the judge's A/B logits for many suffixes of one cached prefix.
  * - `trainStep`: GRPO policy-gradient loss + gradients w.r.t. LoRA adapters
  *   (or all weights for full fine-tuning), returning per-token log-probs.
  *
@@ -72,13 +72,17 @@ function applyRope(x: np.Array, cos: np.Array, sin: np.Array): np.Array {
 
 type Ctx = { cfg: ModelConfig; loraScale: number };
 
-/** Project q/k/v for x: [B, T, D] and apply RoPE. */
+/** Project q/k/v for x: [B, T, D], normalize q/k per head (Qwen3), and apply RoPE. */
 function qkv(ctx: Ctx, lw: Layer, ll: LoraLayer | undefined, x: np.Array, cos: np.Array, sin: np.Array) {
 	const { heads, kvHeads, headDim } = ctx.cfg;
 	const [B, T] = x.shape;
 	let q = linear(lw.q, x.ref, ll?.q, ctx.loraScale).reshape([B, T, heads, headDim]);
 	let k = linear(lw.k, x.ref, ll?.k, ctx.loraScale).reshape([B, T, kvHeads, headDim]);
 	const v = linear(lw.v, x, ll?.v, ctx.loraScale).reshape([B, T, kvHeads, headDim]);
+	if (lw.qNorm && lw.kNorm) {
+		q = rmsNorm(q, lw.qNorm, ctx.cfg.rmsEps);
+		k = rmsNorm(k, lw.kNorm, ctx.cfg.rmsEps);
+	}
 	q = applyRope(q, cos.ref, sin.ref);
 	k = applyRope(k, cos, sin);
 	return { q, k, v };
@@ -162,14 +166,6 @@ export type CompiledModel = ReturnType<typeof compileModel>;
 
 export function compileModel(cfg: ModelConfig, opts: { loraRank?: number; loraAlpha?: number } = {}) {
 	const ctx: Ctx = { cfg, loraScale: (opts.loraAlpha ?? 32) / (opts.loraRank ?? 16) };
-
-	/** Next-token logits at the last position. -> [B, V] */
-	const lastLogitsJit = jit(function lastLogits(W: Weights, lora: Lora, ids: np.Array, pad: np.Array) {
-		const { embed: table, ...rest } = W;
-		const x = embed(table.ref, ids);
-		const { h } = runSequence(ctx, rest, x, lora, pad, false);
-		return logitsOf(table, h.slice([], -1));
-	});
 
 	/** Prompt pass that also returns K/V caches padded to `capacity`. */
 	const prefillJit = jit(
@@ -370,8 +366,6 @@ export function compileModel(cfg: ModelConfig, opts: { loraRank?: number; loraAl
 	return {
 		cfg,
 		loraScale: ctx.loraScale,
-		lastLogits: (W: Weights, lora: Lora | null, ids: np.Array, pad: np.Array) =>
-			lastLogitsJit(W, lora ?? [], ids, pad),
 		prefill: (W: Weights, lora: Lora | null, ids: np.Array, pad: np.Array, capacity: number) =>
 			prefillJit(W, lora ?? [], ids, pad, capacity),
 		extend: (W: Weights, prefix: KV[], prefixPad: np.Array, ids: np.Array, pad: np.Array, pick: np.Array) =>

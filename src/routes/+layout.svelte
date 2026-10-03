@@ -17,8 +17,8 @@
 	<title>GRPO, in the browser</title>
 </svelte:head>
 
-<div class="min-h-screen overflow-x-clip bg-gray-950 text-gray-100">
-	<main class="mx-auto max-w-5xl space-y-8 px-8 py-12 sm:px-16">
+<div class="flex min-h-screen flex-col overflow-x-clip bg-gray-950 text-gray-100">
+	<main class="mx-auto w-full max-w-5xl flex-1 space-y-8 px-8 pt-12 sm:px-16">
 		<header class="space-y-4">
 			<h1 class="text-sm font-bold text-white">GRPO, in the browser</h1>
 			<!-- The steps read as a progression. -->
@@ -44,9 +44,10 @@
 			</nav>
 		</header>
 		{@render children()}
-		<footer class="border-t border-gray-800 pt-6 text-xs text-gray-500">
-			Source <a href="https://github.com/lucasgelfond/grpo-playground" class="text-gray-300 underline hover:text-white">here</a>. Built by
-			<a href="https://lucasgelfond.online/" class="text-gray-300 underline hover:text-white">Lucas Gelfond</a> in New York City.
-		</footer>
 	</main>
+	<!-- Pinned to the bottom, as far from it as the title is from the top. -->
+	<footer class="mx-auto w-full max-w-5xl px-8 pt-16 pb-12 text-xs text-gray-500 sm:px-16">
+		Source <a href="https://github.com/lucasgelfond/grpo-playground" class="text-gray-300 underline hover:text-white">here</a>. Built by
+		<a href="https://lucasgelfond.online/" class="text-gray-300 underline hover:text-white">Lucas Gelfond</a> in New York City.
+	</footer>
 </div>

@@ -9,8 +9,8 @@ import { modelUrl, type ModelDef } from './registry';
  * registry.ts), so a byte range is read from whichever part(s) it falls in.
  *
  * The stock `safetensors.parse` needs the whole file in one ArrayBuffer and
- * doesn't know BF16. Streaming keeps peak JS memory at one tensor (the 1.5B
- * judge is a 3 GB file) and lets us convert BF16 -> f32/f16 on the fly.
+ * doesn't know BF16. Streaming keeps peak JS memory at one tensor (the Qwen3
+ * judge is a 4 GB file) and lets us convert BF16 -> f32/f16 on the fly.
  * Raw tensor bytes are cached in OPFS so the second visit is offline.
  */
 
@@ -19,6 +19,9 @@ export type Linear = { w: np.Array; b?: np.Array };
 export type Layer = {
 	inNorm: np.Array;
 	postNorm: np.Array;
+	/** Qwen3: per-head RMSNorm weights for q and k, [headDim]. */
+	qNorm?: np.Array;
+	kNorm?: np.Array;
 	q: Linear;
 	k: Linear;
 	v: Linear;
@@ -168,6 +171,8 @@ function mapName(name: string): string[] | null {
 		'self_attn.v_proj.weight': ['v', 'w'],
 		'self_attn.v_proj.bias': ['v', 'b'],
 		'self_attn.o_proj.weight': ['o', 'w'],
+		'self_attn.q_norm.weight': ['qNorm'],
+		'self_attn.k_norm.weight': ['kNorm'],
 		'mlp.gate_proj.weight': ['gate', 'w'],
 		'mlp.up_proj.weight': ['up', 'w'],
 		'mlp.down_proj.weight': ['down', 'w']
