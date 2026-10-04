@@ -4,12 +4,6 @@
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
 		<link rel="icon" href="%sveltekit.assets%/favicon.svg" type="image/svg+xml" />
-		<script>
-			// DPO works but isn't exposed in the UI (mostly because GRPO playground was a better name, LOL). if you do ?mode=dpo or go to dpo.lucasgelfond.online you can try the DPO version
-			// dpo.lucasgelfond.online forwards to rl.lucasgelfond.online, so both share one origin and one cache of
-			// model weights (browser storage is per origin; a separate dpo. origin would re-download ~5 GB).
-			if (location.hostname === 'dpo.lucasgelfond.online') location.replace('https://rl.lucasgelfond.online/?mode=dpo');
-		</script>
 		%sveltekit.head%
 	</head>
 	<body data-sveltekit-preload-data="hover">

@@ -17,9 +17,11 @@
 	const current = $derived(STEPS.findIndex((s) => s.href === page.url.pathname));
 	const title = $derived(`${config.algorithm.toUpperCase()}, in the browser`);
 	// DPO works but isn't exposed in the UI (mostly because GRPO playground was a better name, LOL). if you do ?mode=dpo or go to dpo.lucasgelfond.online you can try the DPO version
-	// ?mode=grpo switches back; dpo.lucasgelfond.online forwards here with ?mode=dpo (see app.html).
+	// The domain picks the mode (dpo.… or grpo.…), and ?mode=dpo / ?mode=grpo overrides it. Each domain
+	// keeps its own copy of the model weights: browser storage is per origin.
 	onMount(() => {
-		const mode = page.url.searchParams.get('mode') ?? page.url.searchParams.get('algo');
+		const host = page.url.hostname.split('.')[0];
+		const mode = page.url.searchParams.get('mode') ?? (host === 'dpo' || host === 'grpo' ? host : null);
 		if (mode === 'dpo' || mode === 'grpo') config.algorithm = mode;
 	});
 	// Models load in the background from the prompts page on; show where that's at everywhere.
