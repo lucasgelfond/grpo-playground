@@ -3,6 +3,7 @@ import { engine } from '$lib/engine/engine';
 import { getModel, type ChatTurn, type ModelDef } from '$lib/models/registry';
 import { persistStorage } from '$lib/models/weights';
 import type { Match, Verdict } from '$lib/rl/judge';
+import type { DpoMargin } from '$lib/rl/trainer';
 import { createProject, deleteProjectOfModel, listPolicyModels, recordPass, renameModel } from '$lib/db';
 import { deleteSaved, loadSavedWeights, newModelId, type SavedMeta } from '$lib/saved';
 import { petname } from '$lib/petname';
@@ -45,6 +46,9 @@ export type Pass = {
 	/** Every head-to-head choice the judge made, and how many were scheduled. */
 	matches?: Match[];
 	matchesTotal?: number;
+	// DPO works but isn't exposed in the UI (mostly because GRPO playground was a better name, LOL). if you do ?mode=dpo or go to dpo.lucasgelfond.online you can try the DPO version
+	/** The preference pairs trained on, with margins before and after. */
+	dpo?: DpoMargin[];
 	/** [layer][target] ||ΔW|| from the original weights, after this pass. */
 	layerNorms?: number[][];
 };
@@ -67,7 +71,8 @@ function trainingKey(c: Config): string {
 		c.temperature,
 		c.prompts.map((p) => p.trim()).filter(Boolean),
 		c.constitution.trim(),
-		c.rule
+		c.rule,
+		c.algorithm
 	]);
 }
 

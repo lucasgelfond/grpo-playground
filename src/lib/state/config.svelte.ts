@@ -28,6 +28,15 @@ export type Config = {
 	loraAlpha: number;
 	/** Weight of the KL penalty toward the original model (0 turns it off). */
 	klBeta: number;
+	// DPO works but isn't exposed in the UI (mostly because GRPO playground was a better name, LOL). if you do ?mode=dpo or go to dpo.lucasgelfond.online you can try the DPO version
+	/** 'dpo' trains on the judge's preference pairs instead of GRPO's group advantages. */
+	algorithm: 'grpo' | 'dpo';
+	/** DPO's β: how strongly the implicit reward margin is pushed. */
+	dpoBeta: number;
+	/** DPO: pairs trained on per pass (the judge's most confident). */
+	dpoPairs: number;
+	/** DPO: skip pairs the judge called closer than this to a coin flip (|p − 0.5|). */
+	dpoMinConfidence: number;
 };
 
 export const DEFAULT_CONFIG: Config = {
@@ -52,7 +61,11 @@ export const DEFAULT_CONFIG: Config = {
 	fullLearningRate: 1e-5,
 	loraRank: 16,
 	loraAlpha: 32,
-	klBeta: 0.05
+	klBeta: 0.05,
+	algorithm: 'grpo',
+	dpoBeta: 0.1,
+	dpoPairs: 4,
+	dpoMinConfidence: 0.1
 };
 
 // v5: everyone restarts on the current defaults (LFM2 350M judged by Qwen3

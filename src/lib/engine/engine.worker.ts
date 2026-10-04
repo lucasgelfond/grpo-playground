@@ -12,7 +12,7 @@ import { getModel, promptFor, type ChatTurn, type ModelDef } from '$lib/models/r
 import { loadTokenizer, type Tokenizer } from '$lib/models/tokenizer';
 import { downloadWeights, isCached, loadWeights, type LoadProgress, type Weights } from '$lib/models/weights';
 import { generate } from '$lib/rl/generate';
-import { compareAnswers, judgePrefix, schedulePairs, winRates, type JudgePrefix, type Verdict } from '$lib/rl/judge';
+import { compareAnswers, judgePrefix, schedulePairs, winRates, type JudgePrefix, type Match, type Verdict } from '$lib/rl/judge';
 import { RULES } from '$lib/rl/rules';
 import { PolicyTrainer } from '$lib/rl/trainer';
 import { loadSavedWeights, saveModel, type SavedMeta } from '$lib/saved';
@@ -310,7 +310,10 @@ export class Engine {
 		pass.phase = 'updating';
 		sync();
 		status(`Pass ${index + 1}: updating weights`);
-		const res = await trainer.update(promptIds, gen.tokens, scores, def.padToken, config.klBeta);
+		const res =
+			config.algorithm === 'dpo'
+				? await this.#dpoUpdate(promptIds, gen.tokens, matches, config, pass)
+				: await trainer.update(promptIds, gen.tokens, scores, def.padToken, config.klBeta);
 		res.advantages.forEach((adv, i) => {
 			const a = pass.answers[i];
 			a.advantage = adv;
@@ -325,6 +328,25 @@ export class Engine {
 		pass.phase = 'done';
 		await this.save(input.save).catch((e) => console.warn('Autosave failed', e));
 		return pass;
+	}
+
+	// DPO works but isn't exposed in the UI (mostly because GRPO playground was a better name, LOL). if you do ?mode=dpo or go to dpo.lucasgelfond.online you can try the DPO version
+	/**
+	 * Train on the judge's most confident pairs among the
+	 * trained answers (never the original model's), as soft preferences.
+	 * Advantages here are just each answer's net wins, for the ↑ / ↓ display.
+	 */
+	async #dpoUpdate(promptIds: number[], completions: number[][], matches: Match[], config: Config, pass: Pass) {
+		const G = completions.length;
+		const pairs = matches
+			.filter((m) => m.a < G && m.b < G && Math.abs(m.p - 0.5) >= config.dpoMinConfidence)
+			.sort((x, y) => Math.abs(y.p - 0.5) - Math.abs(x.p - 0.5))
+			.slice(0, config.dpoPairs)
+			.map((m) => (m.p >= 0.5 ? { chosen: m.a, rejected: m.b, p: m.p } : { chosen: m.b, rejected: m.a, p: 1 - m.p }));
+		const res = await this.#trainer!.updateDpo(promptIds, completions, pairs, this.#policyDef!.padToken, config.dpoBeta);
+		pass.dpo = res.margins;
+		const advantages = completions.map((_, i) => pairs.reduce((s, q) => s + (q.chosen === i ? 1 : q.rejected === i ? -1 : 0), 0));
+		return { ...res, advantages };
 	}
 
 	async #sessionBytes(): Promise<Uint8Array<ArrayBuffer>> {

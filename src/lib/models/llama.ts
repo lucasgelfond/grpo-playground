@@ -424,6 +424,44 @@ export function compileModel(cfg: ModelConfig, opts: { loraRank?: number; loraAl
 
 	const trainStepJit = jit(valueAndGrad(grpoLoss, { hasAux: true }), { staticArgnums: [10] });
 
+	// DPO works but isn't exposed in the UI (mostly because GRPO playground was a better name, LOL). if you do ?mode=dpo or go to dpo.lucasgelfond.online you can try the DPO version
+	/**
+	 * DPO loss for a (micro)batch of K preference pairs, rows ordered
+	 * [chosen_0, rejected_0, chosen_1, rejected_1, ...]:
+	 *
+	 *   s = Σ_t log π(token_t) − Σ_t log π_ref(token_t)        (per row)
+	 *   m_k = β · (s_chosen − s_rejected)
+	 *   loss = −Σ_k [ p_k · logσ(m_k) + (1 − p_k) · logσ(−m_k) ] · norm
+	 *
+	 * p_k is how sure the judge was that "chosen" is better (soft labels, as in
+	 * conservative DPO). `mask` is 1 on real completion tokens, `refSeq` the
+	 * reference model's per-row sums. Returns [loss, [per-token log-probs, margins]].
+	 */
+	function dpoLoss(
+		trainable: Weights | Lora,
+		frozen: Weights | Record<string, never>,
+		ids: np.Array,
+		pad: np.Array,
+		targets: np.Array,
+		mask: np.Array,
+		refSeq: np.Array,
+		p: np.Array,
+		beta: np.Array,
+		norm: np.Array
+	): [np.Array, [np.Array, np.Array]] {
+		const [W, lora] = Array.isArray(trainable) ? [frozen as Weights, trainable] : [trainable, [] as Lora];
+		const K = targets.shape[0] / 2;
+		const logp = completionLogprobs(W, lora, ids, pad, targets, 1);
+		const [sc, sr] = np.split(logp.ref.mul(mask).sum(-1).sub(refSeq).reshape([K, 2]), 2, -1);
+		const m = sc.sub(sr).reshape([K]).mul(beta);
+		const agree = nn.logSigmoid(m.ref).mul(p.ref);
+		const disagree = nn.logSigmoid(m.ref.mul(-1)).mul(p.mul(-1).add(1));
+		const loss = agree.add(disagree).sum().mul(norm).mul(-1);
+		return [loss, [logp, m]];
+	}
+
+	const dpoStepJit = jit(valueAndGrad(dpoLoss, { hasAux: true }));
+
 	// jit trees can't contain null, so "no adapter" is an empty list inside.
 	return {
 		cfg,
@@ -448,6 +486,18 @@ export function compileModel(cfg: ModelConfig, opts: { loraRank?: number; loraAl
 			refLogp: np.Array,
 			beta: np.Array,
 			invTemp: number
-		) => trainStepJit(trainable, frozen ?? {}, ids, pad, targets, mask, adv, norm, refLogp, beta, invTemp)
+		) => trainStepJit(trainable, frozen ?? {}, ids, pad, targets, mask, adv, norm, refLogp, beta, invTemp),
+		dpoStep: (
+			trainable: Weights | Lora,
+			frozen: Weights | null,
+			ids: np.Array,
+			pad: np.Array,
+			targets: np.Array,
+			mask: np.Array,
+			refSeq: np.Array,
+			p: np.Array,
+			beta: np.Array,
+			norm: np.Array
+		) => dpoStepJit(trainable, frozen ?? {}, ids, pad, targets, mask, refSeq, p, beta, norm)
 	};
 }
