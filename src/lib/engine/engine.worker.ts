@@ -8,7 +8,7 @@ import { defaultDevice, init, numpy as np, tree } from '@jax-js/jax';
 
 import { loraTensors, parseLora, parseWeights, weightTensors, writeSafetensors } from '$lib/export';
 import { compileModel, type CompiledModel, type Lora } from '$lib/models/llama';
-import { chatPrompt, getModel, type ChatTurn, type ModelDef } from '$lib/models/registry';
+import { getModel, promptFor, type ChatTurn, type ModelDef } from '$lib/models/registry';
 import { loadTokenizer, type Tokenizer } from '$lib/models/tokenizer';
 import { downloadWeights, isCached, loadWeights, type LoadProgress, type Weights } from '$lib/models/weights';
 import { generate } from '$lib/rl/generate';
@@ -197,12 +197,7 @@ export class Engine {
 		};
 		const sync = throttled(() => progress({ pass }));
 		const status = (s: string) => progress({ status: s });
-		const promptIds = tok.encode(
-			chatPrompt([
-				{ role: 'system', content: def.defaultSystemPrompt },
-				{ role: 'user', content: prompt }
-			])
-		);
+		const promptIds = tok.encode(promptFor(def, [{ role: 'user', content: prompt }]));
 
 		// Prefill: the prompt goes into the policy model while the judge prefills
 		// its own prompt for this question (cached after the first time). Then
@@ -311,7 +306,7 @@ export class Engine {
 
 	async #sessionBytes(): Promise<Uint8Array<ArrayBuffer>> {
 		const t = this.#trainer!;
-		return writeSafetensors(t.lora ? await loraTensors(t.lora) : await weightTensors(t.weights), {
+		return writeSafetensors(t.lora ? await loraTensors(t.lora, t.cfg) : await weightTensors(t.weights, t.cfg), {
 			base_model: this.#policyDef!.repo
 		});
 	}
@@ -363,8 +358,8 @@ export class Engine {
 			const bytes = await loadSavedWeights(source);
 			const side =
 				meta.mode === 'lora'
-					? { weights: original.weights, lora: parseLora(bytes, def.config.layers) }
-					: { weights: parseWeights(bytes, def.config.layers), lora: null };
+					? { weights: original.weights, lora: parseLora(bytes, def.config) }
+					: { weights: parseWeights(bytes, def.config), lora: null };
 			this.#chatSaved = { id: source, side };
 		}
 		return { def, tok, side: this.#chatSaved.side };
@@ -417,7 +412,7 @@ export class Engine {
 		for (const source of input.sources) sides.push(await this.#chatSide(source, input.baseId, input.saved));
 		const run = async (k: 0 | 1) => {
 			const { def, tok, side } = sides[k];
-			const ids = tok.encode(chatPrompt([{ role: 'system', content: def.defaultSystemPrompt }, ...input.histories[k]]));
+			const ids = tok.encode(promptFor(def, input.histories[k]));
 			const texts = ['', ''];
 			const sync = throttled(() => progress({ side: k, text: texts[k] }));
 			const gen = await generate(this.#trainer!.model, side.weights, side.lora, ids, {

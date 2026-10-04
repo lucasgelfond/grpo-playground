@@ -1,6 +1,7 @@
 import { blockUntilReady, numpy as np } from '@jax-js/jax';
 import { cachedFetch, opfs } from '@jax-js/loaders';
 
+import { tensorPaths } from './names';
 import { modelUrl, type ModelDef } from './registry';
 
 /**
@@ -19,12 +20,17 @@ export type Linear = { w: np.Array; b?: np.Array };
 export type Layer = {
 	inNorm: np.Array;
 	postNorm: np.Array;
-	/** Qwen3: per-head RMSNorm weights for q and k, [headDim]. */
+	/** Qwen3 / LFM2: per-head RMSNorm weights for q and k, [headDim]. */
 	qNorm?: np.Array;
 	kNorm?: np.Array;
-	q: Linear;
-	k: Linear;
-	v: Linear;
+	/** Attention layers. */
+	q?: Linear;
+	k?: Linear;
+	v?: Linear;
+	/** LFM2 short-conv layers: in_proj [3D, D] and the depthwise kernel [D, 1, K]. */
+	in?: Linear;
+	conv?: np.Array;
+	/** Output projection of either kind of layer. */
 	o: Linear;
 	gate: Linear;
 	up: Linear;
@@ -154,34 +160,6 @@ function toArray(entry: HeaderEntry, raw: Uint8Array<ArrayBuffer>, dtype: np.DTy
 	return np.array(bf16ToF32(raw), { shape: entry.shape, dtype: np.float32 });
 }
 
-/** HF tensor name -> path in our `Weights` tree. */
-function mapName(name: string): string[] | null {
-	if (name === 'model.embed_tokens.weight') return ['embed'];
-	if (name === 'model.norm.weight') return ['norm'];
-	if (name === 'lm_head.weight') return null; // tied to embed_tokens
-	const m = name.match(/^model\.layers\.(\d+)\.(.+)$/);
-	if (!m) throw new Error(`Unexpected tensor ${name}`);
-	const rest: Record<string, string[]> = {
-		'input_layernorm.weight': ['inNorm'],
-		'post_attention_layernorm.weight': ['postNorm'],
-		'self_attn.q_proj.weight': ['q', 'w'],
-		'self_attn.q_proj.bias': ['q', 'b'],
-		'self_attn.k_proj.weight': ['k', 'w'],
-		'self_attn.k_proj.bias': ['k', 'b'],
-		'self_attn.v_proj.weight': ['v', 'w'],
-		'self_attn.v_proj.bias': ['v', 'b'],
-		'self_attn.o_proj.weight': ['o', 'w'],
-		'self_attn.q_norm.weight': ['qNorm'],
-		'self_attn.k_norm.weight': ['kNorm'],
-		'mlp.gate_proj.weight': ['gate', 'w'],
-		'mlp.up_proj.weight': ['up', 'w'],
-		'mlp.down_proj.weight': ['down', 'w']
-	};
-	const path = rest[m[2]];
-	if (!path) throw new Error(`Unexpected tensor ${name}`);
-	return ['layers', m[1], ...path];
-}
-
 function setPath(root: any, path: string[], value: np.Array) {
 	let obj = root;
 	for (let i = 0; i < path.length - 1; i++) {
@@ -203,6 +181,7 @@ export async function loadWeights(
 	onProgress?: (p: LoadProgress) => void
 ): Promise<Weights> {
 	const src = await openSource(def);
+	const paths = tensorPaths(def.config);
 	const { header, dataStart } = await readHeader(src);
 	const entries = Object.entries(header).sort((a, b) => a[1].data_offsets[0] - b[1].data_offsets[0]);
 	const total = entries.reduce((s, [, e]) => s + e.data_offsets[1] - e.data_offsets[0], 0);
@@ -215,7 +194,8 @@ export async function loadWeights(
 	const worker = async () => {
 		while (next < entries.length) {
 			const [name, entry] = entries[next++];
-			const path = mapName(name);
+			if (name !== 'lm_head.weight' && !paths.has(name)) throw new Error(`Unexpected tensor ${name}`);
+			const path = paths.get(name); // lm_head is tied to the embeddings
 			const [s, e] = entry.data_offsets;
 			const { data: raw, fromCache } = await cachedRange(src, name, dataStart + s, dataStart + e);
 			if (!fromCache) downloaded += e - s;

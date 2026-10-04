@@ -10,6 +10,7 @@ import { modelUrl, type ModelDef, type TokenizerKind } from './registry';
  *
  * - SmolLM2: split every digit into its own piece, then the GPT-2 regex.
  * - Qwen2: NFC-normalize, then a single cl100k-style regex.
+ * - LFM2: the same kind of regex (read from tokenizer.json), no normalization.
  */
 
 // GPT-2 pre-tokenizer pattern (HF ByteLevel with use_regex=true).
@@ -68,10 +69,13 @@ export class Tokenizer {
 			if (t.special) this.specialIds.add(t.id);
 		}
 
+		// Added tokens (special or not, e.g. LFM2's "python") are matched as whole
+		// strings before BPE, as in Hugging Face, so they stay out of the BPE vocab.
+		const added = new Set(Object.values(special));
 		const byteDecoder = byteLevelDecoder();
 		const encoder = new Map<string, number>();
 		for (const [piece, id] of Object.entries(data.model.vocab)) {
-			if (this.specialIds.has(id)) continue;
+			if (added.has(id)) continue;
 			encoder.set(byteLevelToHex(piece, byteDecoder), id);
 		}
 
@@ -79,11 +83,12 @@ export class Tokenizer {
 			this.#enc = new tokenizers.BpeEncoding(encoder, special, new DigitsThenGpt2());
 		} else {
 			const split = data.pre_tokenizer.pretokenizers.find((p) => p.type === 'Split');
-			if (!split?.pattern) throw new Error('Expected a Split pre-tokenizer for Qwen2');
+			if (!split?.pattern) throw new Error(`Expected a Split pre-tokenizer for ${kind}`);
 			// JS has no inline `(?i:...)`; it only wraps contractions, so a global
 			// `i` flag is equivalent for this pattern.
 			const pattern = split.pattern.Regex.replace(/^\(\?i:([^)]*)\)/, '(?:$1)');
-			this.#enc = new NfcBpeEncoding(encoder, special, new RegExp(pattern, 'giu'));
+			const Encoding = kind === 'qwen2' ? NfcBpeEncoding : tokenizers.BpeEncoding;
+			this.#enc = new Encoding(encoder, special, new RegExp(pattern, 'giu'));
 		}
 	}
 

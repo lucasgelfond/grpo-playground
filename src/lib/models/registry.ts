@@ -1,8 +1,9 @@
 /**
  * The models this app knows how to load. All are Llama-style decoders
  * (RMSNorm, RoPE, SwiGLU MLP, grouped-query attention, tied embeddings) that
- * differ only in shapes, rope base, whether q/k/v have biases (Qwen2), and
- * whether q and k are RMS-normalized per head (Qwen3).
+ * differ in shapes, rope base, whether q/k/v have biases (Qwen2), and whether
+ * q and k are RMS-normalized per head (Qwen3). LFM2 also swaps most attention
+ * layers for gated short convolutions.
  */
 
 export type ModelConfig = {
@@ -16,11 +17,17 @@ export type ModelConfig = {
 	ropeTheta: number;
 	rmsEps: number;
 	qkvBias: boolean;
-	/** RMSNorm on each head of q and k before RoPE (Qwen3). */
+	/** RMSNorm on each head of q and k before RoPE (Qwen3, LFM2's attention layers). */
 	qkNorm?: boolean;
+	/** Hugging Face tensor naming: Llama-style, or LFM2's. */
+	arch?: 'llama' | 'lfm2';
+	/** LFM2: which layers are attention and which are short convolutions. */
+	layerTypes?: ('attention' | 'conv')[];
+	/** LFM2: width of the short convolution. */
+	convKernel?: number;
 };
 
-export type TokenizerKind = 'smollm2' | 'qwen2';
+export type TokenizerKind = 'smollm2' | 'qwen2' | 'lfm2';
 
 export type ModelDef = {
 	id: string;
@@ -31,7 +38,10 @@ export type ModelDef = {
 	downloadBytes: number;
 	config: ModelConfig;
 	tokenizer: TokenizerKind;
+	/** '' means no system turn at all (LFM2 has no default system prompt). */
 	defaultSystemPrompt: string;
+	/** Text before the first turn, e.g. LFM2's <|startoftext|>. */
+	bos?: string;
 	/** Opens every assistant turn, e.g. Qwen3's empty think block. */
 	assistantPrefix?: string;
 	/** Token ids that end an assistant turn. */
@@ -95,6 +105,38 @@ export const MODELS: ModelDef[] = [
 		defaultSystemPrompt: 'You are a helpful AI assistant named SmolLM, trained by Hugging Face',
 		stopTokens: [2, 0],
 		padToken: 2,
+		trainable: true,
+		fullFinetune: 'heavy',
+		judge: false
+	},
+	{
+		id: 'lfm2-350m',
+		label: 'LFM2 350M',
+		repo: 'LiquidAI/LFM2-350M',
+		params: '354M',
+		downloadBytes: 708_984_464,
+		config: {
+			hidden: 1024,
+			layers: 16,
+			heads: 16,
+			kvHeads: 8,
+			headDim: 64,
+			intermediate: 4608,
+			vocab: 65536,
+			ropeTheta: 1_000_000,
+			rmsEps: 1e-5,
+			qkvBias: false,
+			qkNorm: true,
+			arch: 'lfm2',
+			// Attention at layers 2, 5, 8, 10, 12 and 14; short convolutions elsewhere.
+			layerTypes: Array.from({ length: 16 }, (_, i) => ([2, 5, 8, 10, 12, 14].includes(i) ? 'attention' : 'conv')),
+			convKernel: 3
+		},
+		tokenizer: 'lfm2',
+		defaultSystemPrompt: '',
+		bos: '<|startoftext|>',
+		stopTokens: [7, 2],
+		padToken: 0,
 		trainable: true,
 		fullFinetune: 'heavy',
 		judge: false
@@ -193,7 +235,8 @@ export function getModel(id: string): ModelDef {
  * Hugging Face repos: <repo>/tokenizer.json, and each model.safetensors split
  * into 256 MB parts (R2 uploads are size-limited) with a manifest.
  */
-export const WEIGHTS_BASE = 'https://models.lucasgelfond.online';
+// VITE_WEIGHTS_BASE points a dev build at a local mirror (same layout) for testing.
+export const WEIGHTS_BASE: string = import.meta.env.VITE_WEIGHTS_BASE ?? 'https://models.lucasgelfond.online';
 
 export function modelUrl(def: ModelDef, file: string): string {
 	return `${WEIGHTS_BASE}/${def.repo}/${file}`;
@@ -201,11 +244,19 @@ export function modelUrl(def: ModelDef, file: string): string {
 
 export type ChatTurn = { role: 'system' | 'user' | 'assistant'; content: string };
 
-/** ChatML, shared by SmolLM2 and Qwen. Ends with an open assistant turn. */
-export function chatPrompt(turns: ChatTurn[], assistantPrefix = ''): string {
-	let text = '';
-	for (const t of turns) text += `<|im_start|>${t.role}\n${t.content}<|im_end|>\n`;
+/** ChatML, shared by SmolLM2, Qwen and LFM2. Ends with an open assistant turn. */
+export function chatPrompt(turns: ChatTurn[], assistantPrefix = '', bos = ''): string {
+	let text = bos;
+	for (const t of turns) {
+		if (t.role === 'system' && !t.content) continue;
+		text += `<|im_start|>${t.role}\n${t.content}<|im_end|>\n`;
+	}
 	return text + '<|im_start|>assistant\n' + assistantPrefix;
+}
+
+/** A model's own chat prompt: its system prompt (if any), the turns, and its BOS. */
+export function promptFor(def: ModelDef, turns: ChatTurn[]): string {
+	return chatPrompt([{ role: 'system', content: def.defaultSystemPrompt }, ...turns], def.assistantPrefix, def.bos);
 }
 
 export function formatBytes(n: number): string {

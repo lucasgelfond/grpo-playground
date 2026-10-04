@@ -31,8 +31,8 @@ export type Config = {
 };
 
 export const DEFAULT_CONFIG: Config = {
-	policyId: 'smollm2-135m',
-	judgeId: 'qwen2.5-1.5b',
+	policyId: 'lfm2-350m',
+	judgeId: 'qwen3-1.7b',
 	mode: 'lora',
 	prompts: DEFAULT_TASK.prompts.slice(0, 5),
 	promptOrder: 'shuffle',
@@ -55,9 +55,9 @@ export const DEFAULT_CONFIG: Config = {
 	klBeta: 0.05
 };
 
-// v4: everyone restarts on the current defaults (judge prompts that check
-// correctness, both-order judging, 5 answers at temperature 0.7).
-const KEY = 'grpo-playground:config:v4';
+// v5: everyone restarts on the current defaults (LFM2 350M judged by Qwen3
+// 1.7B, both-order judging, 5 answers at temperature 0.7).
+const KEY = 'grpo-playground:config:v5';
 
 function load(): Config {
 	try {

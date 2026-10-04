@@ -1,20 +1,10 @@
 import { numpy as np } from '@jax-js/jax';
 import { safetensors } from '@jax-js/loaders';
 
-import { LORA_TARGETS, type Lora, type Target } from './models/llama';
-import type { ModelDef } from './models/registry';
+import { layerTargets, type Lora } from './models/llama';
+import { globalTensorNames, hfModule, layerTensorNames } from './models/names';
+import type { ModelConfig, ModelDef } from './models/registry';
 import type { Weights } from './models/weights';
-
-/** HF module path for each adapted projection. */
-const HF_MODULE: Record<Target, string> = {
-	q: 'self_attn.q_proj',
-	k: 'self_attn.k_proj',
-	v: 'self_attn.v_proj',
-	o: 'self_attn.o_proj',
-	gate: 'mlp.gate_proj',
-	up: 'mlp.up_proj',
-	down: 'mlp.down_proj'
-};
 
 type NamedTensor = { name: string; shape: number[]; data: Float32Array };
 
@@ -44,13 +34,26 @@ async function read(x: np.Array): Promise<Float32Array> {
 	return (await x.ref.astype(np.float32).data()) as Float32Array;
 }
 
+/** Follow a path like ['layers', '3', 'q', 'w'] into a tree. */
+function at(root: unknown, path: string[]): np.Array | undefined {
+	let x = root as Record<string, unknown> | undefined;
+	for (const key of path) x = x?.[key] as Record<string, unknown> | undefined;
+	return x as np.Array | undefined;
+}
+
+function setAt(root: Record<string, unknown>, path: string[], value: np.Array) {
+	let x = root;
+	for (const key of path.slice(0, -1)) x = (x[key] ??= {}) as Record<string, unknown>;
+	x[path[path.length - 1]] = value;
+}
+
 /** LoRA adapters in PEFT naming, loadable with `PeftModel.from_pretrained`. */
-export async function loraTensors(lora: Lora): Promise<NamedTensor[]> {
+export async function loraTensors(lora: Lora, cfg: ModelConfig): Promise<NamedTensor[]> {
 	const out: NamedTensor[] = [];
 	for (let i = 0; i < lora.length; i++) {
-		for (const t of LORA_TARGETS) {
-			const prefix = `base_model.model.model.layers.${i}.${HF_MODULE[t]}`;
-			const { a, b } = lora[i][t];
+		for (const t of layerTargets(cfg, i)) {
+			const prefix = `base_model.model.model.layers.${i}.${hfModule(cfg, i, t)}`;
+			const { a, b } = lora[i][t]!;
 			out.push({ name: `${prefix}.lora_A.weight`, shape: a.shape, data: await read(a) });
 			out.push({ name: `${prefix}.lora_B.weight`, shape: b.shape, data: await read(b) });
 		}
@@ -59,21 +62,12 @@ export async function loraTensors(lora: Lora): Promise<NamedTensor[]> {
 }
 
 /** Full weights in HF naming (embeddings tied, so no lm_head). */
-export async function weightTensors(w: Weights): Promise<NamedTensor[]> {
-	const out: NamedTensor[] = [
-		{ name: 'model.embed_tokens.weight', shape: w.embed.shape, data: await read(w.embed) },
-		{ name: 'model.norm.weight', shape: w.norm.shape, data: await read(w.norm) }
-	];
+export async function weightTensors(w: Weights, cfg: ModelConfig): Promise<NamedTensor[]> {
+	const out: NamedTensor[] = [];
+	const add = async (name: string, x: np.Array | undefined) => x && out.push({ name, shape: x.shape, data: await read(x) });
+	for (const [name, path] of globalTensorNames(cfg)) await add(name, at(w, path));
 	for (let i = 0; i < w.layers.length; i++) {
-		const l = w.layers[i];
-		const p = `model.layers.${i}`;
-		out.push({ name: `${p}.input_layernorm.weight`, shape: l.inNorm.shape, data: await read(l.inNorm) });
-		out.push({ name: `${p}.post_attention_layernorm.weight`, shape: l.postNorm.shape, data: await read(l.postNorm) });
-		for (const t of LORA_TARGETS) {
-			out.push({ name: `${p}.${HF_MODULE[t]}.weight`, shape: l[t].w.shape, data: await read(l[t].w) });
-			const bias = l[t].b;
-			if (bias) out.push({ name: `${p}.${HF_MODULE[t]}.bias`, shape: bias.shape, data: await read(bias) });
-		}
+		for (const [name, path] of layerTensorNames(cfg, i)) await add(`model.layers.${i}.${name}`, at(w.layers[i], path));
 	}
 	return out;
 }
@@ -88,7 +82,13 @@ export function peftConfig(def: ModelDef, rank: number, alpha: number): string {
 			lora_alpha: alpha,
 			lora_dropout: 0,
 			bias: 'none',
-			target_modules: LORA_TARGETS.map((t) => HF_MODULE[t].split('.')[1]),
+			target_modules: [
+				...new Set(
+					Array.from({ length: def.config.layers }, (_, i) =>
+						layerTargets(def.config, i).map((t) => hfModule(def.config, i, t).split('.').pop()!)
+					).flat()
+				)
+			],
 			fan_in_fan_out: false,
 			inference_mode: true
 		},
@@ -98,45 +98,34 @@ export function peftConfig(def: ModelDef, rank: number, alpha: number): string {
 }
 
 /** Parse our own safetensors back into a LoRA list or a weights tree. */
-export function parseLora(bytes: Uint8Array<ArrayBuffer>, layers: number): Lora {
+export function parseLora(bytes: Uint8Array<ArrayBuffer>, cfg: ModelConfig): Lora {
 	const file = safetensors.parse(bytes);
-	return Array.from({ length: layers }, (_, i) => {
-		const layer = {} as Lora[number];
-		for (const t of LORA_TARGETS) {
-			const prefix = `base_model.model.model.layers.${i}.${HF_MODULE[t]}`;
-			const a = file.tensors[`${prefix}.lora_A.weight`];
-			const b = file.tensors[`${prefix}.lora_B.weight`];
-			layer[t] = {
-				a: np.array(a.data as Float32Array<ArrayBuffer>, { shape: a.shape }),
-				b: np.array(b.data as Float32Array<ArrayBuffer>, { shape: b.shape })
-			};
+	const get = (name: string) => {
+		const t = file.tensors[name];
+		return np.array(t.data as Float32Array<ArrayBuffer>, { shape: t.shape });
+	};
+	return Array.from({ length: cfg.layers }, (_, i) => {
+		const layer: Lora[number] = {};
+		for (const t of layerTargets(cfg, i)) {
+			const prefix = `base_model.model.model.layers.${i}.${hfModule(cfg, i, t)}`;
+			layer[t] = { a: get(`${prefix}.lora_A.weight`), b: get(`${prefix}.lora_B.weight`) };
 		}
 		return layer;
 	});
 }
 
-export function parseWeights(bytes: Uint8Array<ArrayBuffer>, layers: number): Weights {
+export function parseWeights(bytes: Uint8Array<ArrayBuffer>, cfg: ModelConfig): Weights {
 	const file = safetensors.parse(bytes);
-	const get = (name: string) => {
+	const root: Record<string, unknown> = { layers: Array.from({ length: cfg.layers }, () => ({})) };
+	const put = (name: string, path: string[]) => {
 		const t = file.tensors[name];
-		return t ? np.array(t.data as Float32Array<ArrayBuffer>, { shape: t.shape }) : undefined;
+		if (t) setAt(root, path, np.array(t.data as Float32Array<ArrayBuffer>, { shape: t.shape }));
 	};
-	return {
-		embed: get('model.embed_tokens.weight')!,
-		norm: get('model.norm.weight')!,
-		layers: Array.from({ length: layers }, (_, i) => {
-			const p = `model.layers.${i}`;
-			const layer = {
-				inNorm: get(`${p}.input_layernorm.weight`)!,
-				postNorm: get(`${p}.post_attention_layernorm.weight`)!
-			} as Weights['layers'][number];
-			for (const t of LORA_TARGETS) {
-				const b = get(`${p}.${HF_MODULE[t]}.bias`);
-				layer[t] = b ? { w: get(`${p}.${HF_MODULE[t]}.weight`)!, b } : { w: get(`${p}.${HF_MODULE[t]}.weight`)! };
-			}
-			return layer;
-		})
-	};
+	for (const [name, path] of globalTensorNames(cfg)) put(name, path);
+	for (let i = 0; i < cfg.layers; i++) {
+		for (const [name, path] of layerTensorNames(cfg, i)) put(`model.layers.${i}.${name}`, ['layers', String(i), ...path]);
+	}
+	return root as Weights;
 }
 
 // --- a minimal store-only zip writer, for downloading adapter + config together ---

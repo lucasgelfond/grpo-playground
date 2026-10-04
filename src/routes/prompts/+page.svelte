@@ -180,6 +180,53 @@
 		</section>
 	</div>
 
+	<details class="group card p-3">
+		<summary class="cursor-pointer list-none text-xs text-gray-400 select-none hover:text-gray-200">
+			<span class="inline-block transition-transform group-open:rotate-90">▶</span> advanced
+		</summary>
+		<div class="mt-4 grid gap-x-8 gap-y-3 sm:grid-cols-2 lg:grid-cols-3">
+			{#snippet num(label: string, hint: string, value: number, set: (v: number) => void, min: number, max: number, step: number)}
+				<label class="space-y-1 text-xs text-gray-400">
+					<span class="flex justify-between gap-2 whitespace-nowrap"><span>{label}</span><span class="text-gray-600">{hint}</span></span>
+					<input
+						class="field tabular-nums"
+						type="number"
+						{min}
+						{max}
+						{step}
+						{value}
+						onchange={(e) => {
+							const v = e.currentTarget.valueAsNumber;
+							if (Number.isFinite(v)) set(Math.min(max, Math.max(min, v)));
+						}}
+					/>
+				</label>
+			{/snippet}
+			{@render num('answers per pass', 'group size', config.groupSize, (v) => (config.groupSize = Math.round(v)), 2, 8, 1)}
+			{@render num('max tokens', 'per answer', config.maxNew, (v) => (config.maxNew = Math.round(v)), 16, 256, 16)}
+			{@render num('temperature', 'higher = more varied', config.temperature, (v) => (config.temperature = v), 0.1, 1.5, 0.1)}
+			{@render num('judge matches', `per answer, of ${config.groupSize - 1}`, config.matchesPerAnswer, (v) => (config.matchesPerAnswer = Math.round(v)), 1, 7, 1)}
+			{#if config.mode === 'lora'}
+				{@render num('learning rate', 'LoRA', config.loraLearningRate, (v) => (config.loraLearningRate = v), 1e-6, 1e-2, 1e-5)}
+				{@render num('LoRA rank', 'adapter size', config.loraRank, (v) => (config.loraRank = Math.round(v)), 1, 64, 1)}
+			{:else}
+				{@render num('learning rate', 'whole model', config.fullLearningRate, (v) => (config.fullLearningRate = v), 1e-7, 1e-3, 1e-6)}
+			{/if}
+			{@render num('KL penalty β', '0 turns it off', config.klBeta, (v) => (config.klBeta = v), 0, 1, 0.01)}
+			<label class="flex items-center gap-2 self-end pb-1.5 text-xs text-gray-400">
+				<input type="checkbox" bind:checked={config.bothOrders} />
+				judge both orders <span class="text-gray-600">(2× judge time)</span>
+			</label>
+			<label class="space-y-1 text-xs text-gray-400">
+				<span>prompt order</span>
+				<select class="field" bind:value={config.promptOrder}>
+					<option value="shuffle">shuffled</option>
+					<option value="sequential">in order</option>
+				</select>
+			</label>
+		</div>
+	</details>
+
 	<div class="flex items-center justify-between">
 		<a href="/" class="text-[0.85rem] text-ink-soft hover:text-ink">← back</a>
 		<button type="button" class="btn-primary" onclick={start} disabled={runtime.gpu === 'missing'}>
