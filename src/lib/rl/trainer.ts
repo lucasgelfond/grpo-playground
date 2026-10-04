@@ -36,6 +36,8 @@ export function klPerToken(logp: number, ref: number): number {
 }
 
 const COMPLETION_BUCKET = 32;
+/** Skip groups whose best and worst rewards are closer than this. */
+const MIN_SPREAD = 0.05;
 
 /** [in, out] of each adapted projection. */
 export function targetDims(cfg: ModelConfig, t: Target): [number, number] {
@@ -168,7 +170,9 @@ export class PolicyTrainer {
 	 * Each answer counts equally however long it is (per-answer token mean,
 	 * then group mean). We take one gradient step per group of samples, so the
 	 * PPO ratio π/π_old is exactly 1 and its clipping never activates; the
-	 * gradient is exactly Â · ∇log π. Groups whose rewards all tie are skipped.
+	 * gradient is exactly Â · ∇log π. Groups whose rewards are within MIN_SPREAD
+	 * of each other are skipped: dividing by their tiny std would turn judge
+	 * noise into a full-strength update.
 	 */
 	async update(
 		promptIds: number[],
@@ -180,9 +184,10 @@ export class PolicyTrainer {
 		const G = completions.length;
 		const mean = rewards.reduce((s, r) => s + r, 0) / G;
 		const std = Math.sqrt(rewards.reduce((s, r) => s + (r - mean) ** 2, 0) / G);
-		const advantages = rewards.map((r) => (std > 1e-3 ? (r - mean) / (std + 1e-4) : 0));
+		const tied = Math.max(...rewards) - Math.min(...rewards) < MIN_SPREAD;
+		const advantages = rewards.map((r) => (tied ? 0 : (r - mean) / (std + 1e-4)));
 		const empty = completions.map((c) => c.map(() => 0));
-		if (std <= 1e-3 || completions.every((c) => c.length === 0)) {
+		if (tied || completions.every((c) => c.length === 0)) {
 			return { skipped: true, advantages, loss: 0, logpBefore: empty, logpAfter: empty, kl: completions.map(() => 0) };
 		}
 

@@ -274,7 +274,7 @@ class Runtime {
 			}
 			await this.refreshSaved();
 			this.status = pass.skipped
-				? `Pass ${index + 1}: all answers scored the same, so there was nothing to learn`
+				? `Pass ${index + 1}: the answers scored about the same, so there was nothing to learn`
 				: `Pass ${index + 1} done`;
 		} catch (e) {
 			console.error(e);
