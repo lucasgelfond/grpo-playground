@@ -3,7 +3,8 @@
 name = "grpo-playground"
 compatibility_date = "2026-09-01"
 routes = [
-  { pattern = "grpo.lucasgelfond.online", custom_domain = true }
+  { pattern = "grpo.lucasgelfond.online", custom_domain = true },
+  { pattern = "rl.lucasgelfond.online", custom_domain = true }
 ]
 
 [assets]
