@@ -3,8 +3,8 @@ import { engine } from '$lib/engine/engine';
 import { persistStorage } from '$lib/models/weights';
 
 /**
- * Model downloads, started as soon as the models page opens and kept going
- * across pages. The train page's loader shares the same in-flight requests
+ * Model downloads, kept going across pages. The models page only checks what's
+ * already cached; loading (and so downloading) starts once you leave it. The train page's loader shares the same in-flight requests
  * (see weights.ts): both run in the GPU worker, so nothing is fetched twice.
  */
 export type DownloadState = { loaded: number; total: number; done: boolean; queued?: boolean; error?: string };
@@ -28,6 +28,17 @@ async function ensure(def: ModelDef) {
 	} catch (e) {
 		started.delete(def.id);
 		downloads[def.id].error = e instanceof Error ? e.message : String(e);
+	}
+}
+
+/** Mark which of these models are already in the browser's cache, without downloading anything. */
+export async function checkCached(ids: string[]) {
+	for (const id of ids) {
+		if (downloads[id]) continue;
+		const def = MODELS.find((m) => m.id === id)!;
+		if (await engine('isCached', id).catch(() => false)) {
+			downloads[id] = { loaded: def.downloadBytes, total: def.downloadBytes, done: true };
+		}
 	}
 }
 
