@@ -48,6 +48,9 @@ function throttled(post: () => void): () => void {
 	};
 }
 
+/** Judge prefixes kept prefilled (each ~10–40 MB of K/V). */
+const PREFIX_CACHE = 8;
+
 export class Engine {
 	#gpu: boolean | null = null;
 	#policyDef: ModelDef | null = null;
@@ -96,19 +99,26 @@ export class Engine {
 				progress({ loads });
 			};
 		};
-		// Keep the (3 GB) judge in memory if it hasn't changed; everything else restarts.
+		// Keep the (3 GB) judge in memory if it hasn't changed. In LoRA mode the
+		// trainee's weights are frozen too, so a new project (new prompts or judge
+		// prompt) only needs a fresh adapter, not a reload.
 		const keepJudge = this.#judgeDef?.id === input.judgeId && !!this.#judgeWeights;
-		this.#disposeAll(keepJudge);
+		const kept = input.mode === 'lora' && this.#trainer?.settings.mode === 'lora' && this.#policyDef?.id === input.policyId;
+		const keptWeights = kept ? this.#trainer!.weights : null;
+		this.#disposeAll(keepJudge, kept);
 		const policyDef = getModel(input.policyId);
 		const judgeDef = getModel(input.judgeId);
 
 		progress({ status: 'Loading tokenizers…', loads });
 		[this.#policyTok, this.#judgeTok] = await Promise.all([loadTokenizer(policyDef), loadTokenizer(judgeDef)]);
 
-		progress({ status: `Loading ${policyDef.label}…` });
-		const p = track(`${policyDef.label} (trainee, f32)`, policyDef.downloadBytes);
-		const weights = await loadWeights(policyDef, np.float32, p);
-		p({ done: true });
+		let weights = keptWeights;
+		if (!weights) {
+			progress({ status: `Loading ${policyDef.label}…` });
+			const p = track(`${policyDef.label} (trainee, f32)`, policyDef.downloadBytes);
+			weights = await loadWeights(policyDef, np.float32, p);
+			p({ done: true });
+		}
 		let base: Weights | null = null;
 		if (input.mode === 'full') {
 			// Full fine-tuning keeps an untouched copy for comparisons (read from cache).
@@ -137,6 +147,19 @@ export class Engine {
 		this.#judgeDef = judgeDef;
 	}
 
+	/**
+	 * Precompute what the first passes will need for these prompts, while the
+	 * user is still on another page: the judge's prefilled instructions and the
+	 * original model's answer for each. Both are cached, so a pass reuses them.
+	 */
+	async warm(input: { prompts: string[]; constitution: string; maxNew: number }): Promise<void> {
+		if (!this.#trainer || !this.#policyDef || !this.#policyTok || !this.#judgeModel) return;
+		for (const prompt of input.prompts.slice(0, PREFIX_CACHE)) {
+			await this.#prefixFor(input.constitution, prompt);
+			await this.#referenceFor(prompt, this.#policyTok.encode(promptFor(this.#policyDef, [{ role: 'user', content: prompt }])), input.maxNew);
+		}
+	}
+
 	async #prefixFor(constitution: string, question: string): Promise<JudgePrefix> {
 		const key = `${constitution}\u0000${question}`;
 		let prefix = this.#prefixes.get(key);
@@ -144,7 +167,7 @@ export class Engine {
 			prefix = await judgePrefix(this.#judgeModel!, this.#judgeWeights!, this.#judgeTok!, this.#judgeDef!.padToken, constitution, question);
 			this.#prefixes.set(key, prefix);
 			// Bounded: each prefix is ~10 MB of K/V for Qwen2.5 1.5B, ~40 MB for Qwen3 1.7B.
-			if (this.#prefixes.size > 8) {
+			if (this.#prefixes.size > PREFIX_CACHE) {
 				const [oldest, old] = this.#prefixes.entries().next().value!;
 				tree.dispose(old.kv);
 				this.#prefixes.delete(oldest);
@@ -436,9 +459,9 @@ export class Engine {
 		else tree.dispose(weights);
 	}
 
-	#disposeAll(keepJudge = false) {
-		// Reference answers come from the old policy base; judge prefixes stay valid with the same judge.
-		this.#references.clear();
+	#disposeAll(keepJudge = false, keepPolicyWeights = false) {
+		// Reference answers come from the policy's original weights: they survive only if those do.
+		if (!keepPolicyWeights) this.#references.clear();
 		if (!keepJudge) {
 			for (const p of this.#prefixes.values()) tree.dispose(p.kv);
 			this.#prefixes.clear();
@@ -447,7 +470,7 @@ export class Engine {
 			this.#judgeModel = null;
 			this.#judgeDef = null;
 		}
-		this.#trainer?.dispose();
+		this.#trainer?.dispose(keepPolicyWeights);
 		this.#trainer = null;
 		this.#policyDef = null;
 		if (this.#chatSaved) this.#disposeSide(this.#chatSaved.side);
