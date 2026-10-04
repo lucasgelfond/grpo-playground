@@ -1,6 +1,9 @@
 <script lang="ts">
 	import '../app.css';
 	import { page } from '$app/state';
+	import { onMount } from 'svelte';
+
+	import { config } from '$lib/state/config.svelte';
 	import { runtime } from '$lib/state/runtime.svelte';
 
 	let { children } = $props();
@@ -12,6 +15,13 @@
 		{ href: '/evaluate', label: 'evaluate' }
 	];
 	const current = $derived(STEPS.findIndex((s) => s.href === page.url.pathname));
+	const title = $derived(`${config.algorithm.toUpperCase()}, in the browser`);
+	// DPO works but isn't exposed in the UI (mostly because GRPO playground was a better name, LOL). if you do ?mode=dpo or go to dpo.lucasgelfond.online you can try the DPO version
+	// ?mode=grpo switches back; dpo.lucasgelfond.online forwards here with ?mode=dpo (see app.html).
+	onMount(() => {
+		const mode = page.url.searchParams.get('mode') ?? page.url.searchParams.get('algo');
+		if (mode === 'dpo' || mode === 'grpo') config.algorithm = mode;
+	});
 	// Models load in the background from the prompts page on; show where that's at everywhere.
 	const loadedPct = $derived.by(() => {
 		const total = runtime.loads.reduce((s, l) => s + l.total, 0);
@@ -20,13 +30,13 @@
 </script>
 
 <svelte:head>
-	<title>GRPO, in the browser</title>
+	<title>{title}</title>
 </svelte:head>
 
 <div class="flex min-h-screen flex-col overflow-x-clip bg-gray-950 text-gray-100">
 	<main class="mx-auto w-full max-w-5xl flex-1 space-y-8 px-8 pt-12 sm:px-16">
 		<header class="space-y-4">
-			<h1 class="text-sm font-bold text-white">GRPO, in the browser</h1>
+			<h1 class="text-sm font-bold text-white">{title}</h1>
 			<!-- The steps read as a progression. -->
 			<nav class="flex flex-wrap items-center gap-2 text-xs">
 				{#each STEPS as step, i (step.href)}
