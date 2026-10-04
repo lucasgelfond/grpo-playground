@@ -4,7 +4,8 @@ import type { ModelConfig } from './registry';
 import type { Layer, Linear, Weights } from './weights';
 
 /**
- * A Llama-style decoder (SmolLM2 / Qwen2.5 / Qwen3) written against jax-js, plus the
+ * A Llama-style decoder (SmolLM2 / Qwen2.5 / Qwen3, and LFM2's mix of attention
+ * and short-convolution layers) written against jax-js, plus the
  * three compiled entry points the app needs:
  *
  * - `prefill` / `decode`: batched KV-cache generation for sampling answers.
@@ -21,13 +22,26 @@ import type { Layer, Linear, Weights } from './weights';
  * `.ref` is taken wherever a value is used more than once.
  */
 
-export const LORA_TARGETS = ['q', 'k', 'v', 'o', 'gate', 'up', 'down'] as const;
+/** Every projection an adapter can target. A layer has the ones its kind uses (see layerTargets). */
+export const LORA_TARGETS = ['q', 'k', 'v', 'in', 'o', 'gate', 'up', 'down'] as const;
 export type Target = (typeof LORA_TARGETS)[number];
 export type LoraPair = { a: np.Array; b: np.Array }; // a: [r, in], b: [out, r]
-export type LoraLayer = Record<Target, LoraPair>;
+export type LoraLayer = Partial<Record<Target, LoraPair>>;
 export type Lora = LoraLayer[];
 
 export type KV = { k: np.Array; v: np.Array }; // [B, cap, kvHeads, headDim]
+/** Short-conv layers carry the last K-1 gated inputs instead of keys and values: [B, K-1, D]. */
+export type ConvState = { conv: np.Array };
+export type LayerCache = KV | ConvState;
+
+export type LayerKind = 'attention' | 'conv';
+export function layerKind(cfg: ModelConfig, i: number): LayerKind {
+	return cfg.layerTypes?.[i] ?? 'attention';
+}
+/** The projections a layer has: attention q/k/v/o, or a short conv's in/out, plus the MLP. */
+export function layerTargets(cfg: ModelConfig, i: number): Target[] {
+	return layerKind(cfg, i) === 'conv' ? ['in', 'o', 'gate', 'up', 'down'] : ['q', 'k', 'v', 'o', 'gate', 'up', 'down'];
+}
 
 function f32(x: np.Array): np.Array {
 	return x.dtype === np.float32 ? x : x.astype(np.float32);
@@ -76,9 +90,9 @@ type Ctx = { cfg: ModelConfig; loraScale: number };
 function qkv(ctx: Ctx, lw: Layer, ll: LoraLayer | undefined, x: np.Array, cos: np.Array, sin: np.Array) {
 	const { heads, kvHeads, headDim } = ctx.cfg;
 	const [B, T] = x.shape;
-	let q = linear(lw.q, x.ref, ll?.q, ctx.loraScale).reshape([B, T, heads, headDim]);
-	let k = linear(lw.k, x.ref, ll?.k, ctx.loraScale).reshape([B, T, kvHeads, headDim]);
-	const v = linear(lw.v, x, ll?.v, ctx.loraScale).reshape([B, T, kvHeads, headDim]);
+	let q = linear(lw.q!, x.ref, ll?.q, ctx.loraScale).reshape([B, T, heads, headDim]);
+	let k = linear(lw.k!, x.ref, ll?.k, ctx.loraScale).reshape([B, T, kvHeads, headDim]);
+	const v = linear(lw.v!, x, ll?.v, ctx.loraScale).reshape([B, T, kvHeads, headDim]);
 	if (lw.qNorm && lw.kNorm) {
 		q = rmsNorm(q, lw.qNorm, ctx.cfg.rmsEps);
 		k = rmsNorm(k, lw.kNorm, ctx.cfg.rmsEps);
@@ -92,6 +106,36 @@ function mlp(ctx: Ctx, lw: Layer, ll: LoraLayer | undefined, x: np.Array): np.Ar
 	const g = linear(lw.gate, x.ref, ll?.gate, ctx.loraScale);
 	const u = linear(lw.up, x, ll?.up, ctx.loraScale);
 	return linear(lw.down, nn.silu(g).mul(u), ll?.down, ctx.loraScale);
+}
+
+/**
+ * LFM2's short convolution over a whole sequence. x: [B, T, D], already
+ * normalized, with padding rows zeroed (so padding feeds the convolution the
+ * same zeros an unpadded sequence starts with). in_proj splits into gates
+ * (b, c) and input u; y = c * conv(b * u), a causal depthwise convolution of
+ * width K. Returns the projected output and the last K-1 gated inputs.
+ */
+function shortConv(ctx: Ctx, lw: Layer, ll: LoraLayer | undefined, x: np.Array): [np.Array, np.Array] {
+	const { hidden: D, convKernel: K = 3 } = ctx.cfg;
+	const T = x.shape[1];
+	const [b, c, u] = np.split(linear(lw.in!, x, ll?.in, ctx.loraScale), 3, -1);
+	const padded = np.pad(b.mul(u), { 1: [K - 1, 0] }); // [B, K-1+T, D]
+	const w = f32(lw.conv!).reshape([D, K]);
+	let y = padded.ref.slice([], [0, T]).mul(w.ref.slice([], 0));
+	for (let j = 1; j < K; j++) y = y.add(padded.ref.slice([], [j, j + T]).mul(w.ref.slice([], j)));
+	w.dispose();
+	const state = padded.slice([], [T, T + K - 1]);
+	return [linear(lw.o, c.mul(y), ll?.o, ctx.loraScale), state];
+}
+
+/** One decode step of the short convolution. x: [B, 1, D]; state: [B, K-1, D]. */
+function shortConvStep(ctx: Ctx, lw: Layer, ll: LoraLayer | undefined, x: np.Array, state: np.Array): [np.Array, np.Array] {
+	const { hidden: D, convKernel: K = 3 } = ctx.cfg;
+	const [b, c, u] = np.split(linear(lw.in!, x, ll?.in, ctx.loraScale), 3, -1);
+	const window = np.concatenate([state, b.mul(u)], 1); // [B, K, D]
+	const w = f32(lw.conv!).reshape([D, K]).transpose().reshape([1, K, D]);
+	const y = window.ref.mul(w).sum(1, { keepdims: true });
+	return [linear(lw.o, c.mul(y), ll?.o, ctx.loraScale), window.slice([], [1, K])];
 }
 
 function embed(table: np.Array, ids: np.Array): np.Array {
@@ -123,7 +167,7 @@ function runSequence(
 	lora: Lora,
 	pad: np.Array,
 	keepKV: boolean
-): { h: np.Array; kvs: KV[] } {
+): { h: np.Array; kvs: LayerCache[] } {
 	const { cfg } = ctx;
 	const [B, T] = x.shape;
 	const idx = np.arange(T);
@@ -133,25 +177,35 @@ function runSequence(
 		.sub(pad.ref.astype(np.float32).reshape([B, 1]));
 	// Real queries see only real keys; pad queries see earlier pads, which
 	// keeps their softmax finite (they're never read by real tokens).
+	// Short-conv layers see padding as zeros: [B, T, 1], 1 for real tokens.
+	const real = cfg.layerTypes ? idx.ref.reshape([1, T, 1]).greaterEqual(pad.ref.reshape([B, 1, 1])).astype(np.float32) : null;
 	const keyReal = idx.ref.reshape([1, 1, 1, T]).greaterEqual(pad.ref.reshape([B, 1, 1, 1]));
 	const queryPad = idx.reshape([1, 1, T, 1]).less(pad.reshape([B, 1, 1, 1]));
 	const mask = np.logicalOr(keyReal, queryPad);
 	const [cos, sin] = ropeTables(positions, cfg.headDim, cfg.ropeTheta);
 
-	const kvs: KV[] = [];
+	const kvs: LayerCache[] = [];
 	for (let i = 0; i < cfg.layers; i++) {
 		const lw = W.layers[i];
 		const ll = lora[i];
 		const h = rmsNorm(x.ref, lw.inNorm, cfg.rmsEps);
-		const { q, k, v } = qkv(ctx, lw, ll, h, cos.ref, sin.ref);
-		const attn = nn.dotProductAttention(q, keepKV ? k.ref : k, keepKV ? v.ref : v, {
-			mask: mask.ref,
-			isCausal: true
-		});
-		if (keepKV) kvs.push({ k, v });
-		x = x.add(linear(lw.o, attn.reshape([B, T, cfg.heads * cfg.headDim]), ll?.o, ctx.loraScale));
+		if (layerKind(cfg, i) === 'conv') {
+			const [out, state] = shortConv(ctx, lw, ll, h.mul(real!.ref));
+			if (keepKV) kvs.push({ conv: state });
+			else state.dispose();
+			x = x.add(out);
+		} else {
+			const { q, k, v } = qkv(ctx, lw, ll, h, cos.ref, sin.ref);
+			const attn = nn.dotProductAttention(q, keepKV ? k.ref : k, keepKV ? v.ref : v, {
+				mask: mask.ref,
+				isCausal: true
+			});
+			if (keepKV) kvs.push({ k, v });
+			x = x.add(linear(lw.o, attn.reshape([B, T, cfg.heads * cfg.headDim]), ll?.o, ctx.loraScale));
+		}
 		x = x.add(mlp(ctx, lw, ll, rmsNorm(x.ref, lw.postNorm, cfg.rmsEps)));
 	}
+	real?.dispose();
 	mask.dispose();
 	cos.dispose();
 	sin.dispose();
@@ -174,11 +228,10 @@ export function compileModel(cfg: ModelConfig, opts: { loraRank?: number; loraAl
 			const T = ids.shape[1];
 			const x = embed(table.ref, ids);
 			const { h, kvs } = runSequence(ctx, rest, x, lora, pad, true);
-			const caches = kvs.map(({ k, v }) => ({
-				k: np.pad(k, { 1: [0, capacity - T] }),
-				v: np.pad(v, { 1: [0, capacity - T] })
-			}));
-			return [logitsOf(table, h.slice([], -1)), caches] as [np.Array, KV[]];
+			const caches = kvs.map((c) =>
+				'conv' in c ? c : { k: np.pad(c.k, { 1: [0, capacity - T] }), v: np.pad(c.v, { 1: [0, capacity - T] }) }
+			);
+			return [logitsOf(table, h.slice([], -1)), caches] as [np.Array, LayerCache[]];
 		},
 		{ staticArgnums: [4] }
 	);
@@ -190,6 +243,7 @@ export function compileModel(cfg: ModelConfig, opts: { loraRank?: number; loraAl
 	 * different suffix, left-padded by pad[b] between prefix and suffix; those
 	 * pad keys are masked. Returns last-token logits [B, V].
 	 *
+	 * Attention-only models (the judges); LFM2's conv layers aren't handled here.
 	 * The judge uses this to read its long, shared instructions once and then
 	 * only pay for each pair of answers. Only the logits of `pick` (token ids,
 	 * e.g. "A" and "B") are computed: -> [B, pick.length], not [B, vocab].
@@ -255,14 +309,15 @@ export function compileModel(cfg: ModelConfig, opts: { loraRank?: number; loraAl
 	const decodeJit = jit(function decode(
 		W: Weights,
 		lora: Lora,
-		caches: KV[],
+		caches: LayerCache[],
 		token: np.Array,
 		cur: np.Array,
 		pad: np.Array
 	) {
 		const { embed: table, layers, norm } = W;
 		const B = token.shape[0];
-		const cap = caches[0].k.shape[1];
+		// Every model has at least one attention layer; its cache sets the capacity.
+		const cap = caches.find((c): c is KV => 'k' in c)!.k.shape[1];
 		let x = embed(table.ref, token).reshape([B, 1, cfg.hidden]);
 		const positions = cur.ref.astype(np.float32).sub(pad.ref.astype(np.float32)).reshape([B, 1]);
 		const [cos, sin] = ropeTables(positions, cfg.headDim, cfg.ropeTheta);
@@ -273,17 +328,24 @@ export function compileModel(cfg: ModelConfig, opts: { loraRank?: number; loraAl
 			slots.reshape([1, 1, 1, cap]).lessEqual(cur)
 		);
 
-		const newCaches: KV[] = [];
+		const newCaches: LayerCache[] = [];
 		for (let i = 0; i < cfg.layers; i++) {
 			const lw = layers[i];
 			const ll = lora[i];
 			const h = rmsNorm(x.ref, lw.inNorm, cfg.rmsEps);
-			const { q, k, v } = qkv(ctx, lw, ll, h, cos.ref, sin.ref);
-			const kc = np.where(slotMask.ref, k, caches[i].k);
-			const vc = np.where(slotMask.ref, v, caches[i].v);
-			const attn = nn.dotProductAttention(q, kc.ref, vc.ref, { mask: valid.ref });
-			newCaches.push({ k: kc, v: vc });
-			x = x.add(linear(lw.o, attn.reshape([B, 1, cfg.heads * cfg.headDim]), ll?.o, ctx.loraScale));
+			const cache = caches[i];
+			if ('conv' in cache) {
+				const [out, state] = shortConvStep(ctx, lw, ll, h, cache.conv);
+				newCaches.push({ conv: state });
+				x = x.add(out);
+			} else {
+				const { q, k, v } = qkv(ctx, lw, ll, h, cos.ref, sin.ref);
+				const kc = np.where(slotMask.ref, k, cache.k);
+				const vc = np.where(slotMask.ref, v, cache.v);
+				const attn = nn.dotProductAttention(q, kc.ref, vc.ref, { mask: valid.ref });
+				newCaches.push({ k: kc, v: vc });
+				x = x.add(linear(lw.o, attn.reshape([B, 1, cfg.heads * cfg.headDim]), ll?.o, ctx.loraScale));
+			}
 			x = x.add(mlp(ctx, lw, ll, rmsNorm(x.ref, lw.postNorm, cfg.rmsEps)));
 		}
 		slotMask.dispose();
@@ -291,7 +353,7 @@ export function compileModel(cfg: ModelConfig, opts: { loraRank?: number; loraAl
 		cos.dispose();
 		sin.dispose();
 		const h = rmsNorm(x, norm, cfg.rmsEps).reshape([B, cfg.hidden]);
-		return [logitsOf(table, h), newCaches] as [np.Array, KV[]];
+		return [logitsOf(table, h), newCaches] as [np.Array, LayerCache[]];
 	});
 
 	/**
@@ -370,7 +432,7 @@ export function compileModel(cfg: ModelConfig, opts: { loraRank?: number; loraAl
 			prefillJit(W, lora ?? [], ids, pad, capacity),
 		extend: (W: Weights, prefix: KV[], prefixPad: np.Array, ids: np.Array, pad: np.Array, pick: np.Array) =>
 			extendJit(W, prefix, prefixPad, ids, pad, pick),
-		decode: (W: Weights, lora: Lora | null, caches: KV[], token: np.Array, cur: np.Array, pad: np.Array) =>
+		decode: (W: Weights, lora: Lora | null, caches: LayerCache[], token: np.Array, cur: np.Array, pad: np.Array) =>
 			decodeJit(W, lora ?? [], caches, token, cur, pad),
 		logprobs: (W: Weights, lora: Lora | null, ids: np.Array, pad: np.Array, targets: np.Array, invTemp: number) =>
 			logprobsJit(W, lora ?? [], ids, pad, targets, invTemp),

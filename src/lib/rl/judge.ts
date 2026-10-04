@@ -93,7 +93,7 @@ export async function judgePrefix(
 	const ids = tok.encode(comparePrefix(constitution, question));
 	const P = bucket(ids.length, JUDGE_BUCKET);
 	const { row, pad } = leftPad(ids, P, padToken);
-	const [logits, kv] = model.prefill(
+	const [logits, caches] = model.prefill(
 		tree.ref(weights),
 		null,
 		np.array(new Int32Array(row), { shape: [1, P], dtype: np.int32 }),
@@ -101,6 +101,7 @@ export async function judgePrefix(
 		P
 	);
 	logits.dispose();
+	const kv = caches as KV[]; // judges are attention-only
 	await Promise.all(kv.map(({ k, v }) => Promise.all([k.blockUntilReady(), v.blockUntilReady()])));
 	return { kv, pad };
 }

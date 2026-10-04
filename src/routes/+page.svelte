@@ -1,17 +1,16 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 
-	import { formatBytes, getModel, MODELS, type ModelDef } from '$lib/models/registry';
-		import { estimateCost, type Mode } from '$lib/rl/trainer';
+	import { formatBytes, getModel, type ModelDef } from '$lib/models/registry';
+	import { estimateCost, type Mode } from '$lib/rl/trainer';
 	import { config } from '$lib/state/config.svelte';
 	import { downloadAll, downloads } from '$lib/state/downloads.svelte';
 	import { runtime } from '$lib/state/runtime.svelte';
 
-	// Just the small model for now: fast passes and room beside the judge.
-	const trainees = MODELS.filter((m) => m.id === 'smollm2-135m');
+	const pick = (ids: string[]) => ids.map(getModel);
+	const trainees = pick(['lfm2-350m', 'smollm2-135m', 'smollm2-360m']);
 	// Choosing between answers needs a 1.5B+ judge; the 0.5B nearly always picks the first answer.
-	// Qwen3 1.7B works (weights are mirrored) but is hidden for now: Qwen2.5 1.5B is smaller and faster.
-	const judges = MODELS.filter((m) => m.id === 'qwen2.5-1.5b');
+	const judges = pick(['qwen3-1.7b', 'qwen2.5-1.5b']);
 
 	onMount(() => {
 		deviceMemory = (navigator as Navigator & { deviceMemory?: number }).deviceMemory;

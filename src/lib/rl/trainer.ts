@@ -1,7 +1,7 @@
 import { blockUntilReady, jit, numpy as np, tree } from '@jax-js/jax';
 import { adamw, applyUpdates, chain, clipByGlobalNorm, type GradientTransformation, type OptState } from '@jax-js/optax';
 
-import { compileModel, LORA_TARGETS, type CompiledModel, type Lora, type Target } from '../models/llama';
+import { compileModel, layerTargets, LORA_TARGETS, type CompiledModel, type Lora, type Target } from '../models/llama';
 import type { ModelConfig, ModelDef } from '../models/registry';
 import type { Weights } from '../models/weights';
 import { bucket, leftPad, PROMPT_BUCKET } from './generate';
@@ -49,8 +49,11 @@ export function targetDims(cfg: ModelConfig, t: Target): [number, number] {
 		case 'k':
 		case 'v':
 			return [cfg.hidden, kv];
+		case 'in':
+			return [cfg.hidden, 3 * cfg.hidden];
 		case 'o':
-			return [q, cfg.hidden];
+			// A short-conv layer's output projection is [D, D]; attention's is [heads * headDim, D].
+			return [cfg.layerTypes ? cfg.hidden : q, cfg.hidden];
 		case 'gate':
 		case 'up':
 			return [cfg.hidden, cfg.intermediate];
@@ -73,9 +76,9 @@ function gaussian(n: number, std: number): Float32Array<ArrayBuffer> {
 
 /** Standard LoRA init: A ~ N(0, 1/in), B = 0, so the adapter starts as a no-op. */
 export function initLora(cfg: ModelConfig, rank: number): Lora {
-	return Array.from({ length: cfg.layers }, () => {
-		const layer = {} as Lora[number];
-		for (const t of LORA_TARGETS) {
+	return Array.from({ length: cfg.layers }, (_, i) => {
+		const layer: Lora[number] = {};
+		for (const t of layerTargets(cfg, i)) {
 			const [inDim, outDim] = targetDims(cfg, t);
 			layer[t] = {
 				a: np.array(gaussian(rank * inDim, 1 / Math.sqrt(inDim)), { shape: [rank, inDim] }),
@@ -124,6 +127,7 @@ export class PolicyTrainer {
 				lora.map((layer) =>
 					np.stack(
 						LORA_TARGETS.map((t) => {
+							if (!layer[t]) return np.zeros([]);
 							const { a, b } = layer[t];
 							const aat = np.dot(a.ref, a.transpose());
 							const btb = np.dot(b.ref.transpose(), b);
@@ -138,7 +142,8 @@ export class PolicyTrainer {
 				w.layers.map((layer, i) =>
 					np.stack(
 						LORA_TARGETS.map((t) => {
-							const d = layer[t].w.sub(w0.layers[i][t].w);
+							if (!layer[t]) return np.zeros([]);
+							const d = layer[t].w.sub(w0.layers[i][t]!.w);
 							return np.sqrt(d.ref.mul(d).sum());
 						})
 					)
@@ -298,15 +303,16 @@ export class PolicyTrainer {
 
 /** Rough cost model shown on the setup screen. */
 export function estimateCost(cfg: ModelConfig, mode: Mode, rank: number) {
-	const perLayerMatrices = LORA_TARGETS.reduce((s, t) => {
-		const [i, o] = targetDims(cfg, t);
-		return s + i * o;
-	}, 0);
-	const totalParams = cfg.layers * perLayerMatrices + cfg.vocab * cfg.hidden;
-	const loraParams = cfg.layers * LORA_TARGETS.reduce((s, t) => {
-		const [i, o] = targetDims(cfg, t);
-		return s + rank * (i + o);
-	}, 0);
+	let matrices = 0;
+	let loraParams = 0;
+	for (let l = 0; l < cfg.layers; l++) {
+		for (const t of layerTargets(cfg, l)) {
+			const [i, o] = targetDims(cfg, t);
+			matrices += i * o;
+			loraParams += rank * (i + o);
+		}
+	}
+	const totalParams = matrices + cfg.vocab * cfg.hidden;
 	const trainable = mode === 'lora' ? loraParams : totalParams;
 	const f32 = 4;
 	// weights + (full: frozen copy for comparisons) + grads + Adam m and v.

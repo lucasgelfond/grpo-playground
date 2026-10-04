@@ -1,6 +1,6 @@
 import { numpy as np, tree } from '@jax-js/jax';
 
-import type { CompiledModel, KV, Lora } from '../models/llama';
+import type { CompiledModel, LayerCache, Lora } from '../models/llama';
 import type { Weights } from '../models/weights';
 
 export const PROMPT_BUCKET = 32;
@@ -84,7 +84,7 @@ export async function generate(
 	const stopped = new Array<boolean>(B).fill(false);
 
 	let logits: np.Array | null;
-	let caches: KV[];
+	let caches: LayerCache[];
 	[logits, caches] = model.prefill(
 		tree.ref(weights),
 		lora ? tree.ref(lora) : null,

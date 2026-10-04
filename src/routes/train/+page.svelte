@@ -252,7 +252,7 @@
 					</div>
 				</div>
 				{#if pass?.layerNorms}
-					<LayerGrid norms={pass.layerNorms} prev={prevPass?.layerNorms} view={gridView} />
+					<LayerGrid cfg={getModel(config.policyId).config} norms={pass.layerNorms} prev={prevPass?.layerNorms} view={gridView} />
 				{/if}
 			</section>
 		</div>

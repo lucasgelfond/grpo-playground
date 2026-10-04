@@ -1,40 +1,46 @@
 <script lang="ts">
-	import { LORA_TARGETS, type Target } from '$lib/models/llama';
+	import { layerTargets, LORA_TARGETS, type Target } from '$lib/models/llama';
+	import type { ModelConfig } from '$lib/models/registry';
 
 	const {
+		cfg,
 		norms,
 		prev,
 		view
 	}: {
+		/** The trained model: which projections each layer has (LFM2 mixes attention and conv layers). */
+		cfg: ModelConfig;
 		norms: number[][];
 		prev: number[][] | undefined;
 		/** 'total': distance from the original weights; 'pass': how much this pass moved each matrix. */
 		view: 'total' | 'pass';
 	} = $props();
 
+	const has = $derived(Array.from({ length: cfg.layers }, (_, l) => new Set(layerTargets(cfg, l))));
+	const rows = $derived(LORA_TARGETS.map((target, t) => ({ target, t })).filter(({ target }) => has.some((s) => s.has(target))));
 	const values = $derived(
 		view === 'total' || !prev ? norms : norms.map((row, l) => row.map((v, t) => Math.abs(v - prev[l][t])))
 	);
 	const max = $derived(Math.max(1e-12, ...values.flat()));
 	const rowTotals = $derived(values.map((r) => r.reduce((s, v) => s + v, 0)));
 	const maxRow = $derived(Math.max(1e-12, ...rowTotals));
-	const LABEL: Record<Target, string> = { q: 'q', k: 'k', v: 'v', o: 'o', gate: 'gate', up: 'up', down: 'down' };
+	const LABEL: Record<Target, string> = { q: 'q', k: 'k', v: 'v', in: 'in', o: 'o', gate: 'gate', up: 'up', down: 'down' };
 </script>
 
 <!-- Transposed so it stays short: one row per projection, one column per layer. -->
 <div class="overflow-x-auto">
 	<table class="border-separate border-spacing-[2px] text-[0.68rem] tabular-nums">
 		<tbody>
-			{#each LORA_TARGETS as target, t (target)}
+			{#each rows as { target, t } (target)}
 				<tr>
 					<td class="pr-1.5 text-right text-ink-soft">{LABEL[target]}</td>
 					{#each values as row, l (l)}
 						<td class="p-0">
-							<div
+							{#if has[l]?.has(target)}<div
 								class="h-3 w-3 rounded-[2px]"
 								style:background="color-mix(in oklch, var(--color-accent) {Math.round((row[t] / max) * 100)}%, var(--color-muted))"
 								title="layer {l} {target}: {row[t].toExponential(2)}"
-							></div>
+							></div>{:else}<div class="h-3 w-3"></div>{/if}
 						</td>
 					{/each}
 				</tr>
