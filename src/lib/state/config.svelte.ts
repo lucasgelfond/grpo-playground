@@ -38,14 +38,16 @@ export const DEFAULT_CONFIG: Config = {
 	promptOrder: 'shuffle',
 	constitution: DEFAULT_TASK.constitution,
 	rule: DEFAULT_TASK.rule ?? null,
-	matchesPerAnswer: 3,
-	bothOrders: false,
-	// Few answers per prompt keeps the judge cheap (a round robin of 4 is 6
-	// pairs): more prompts per minute beats a finer ranking of each group.
-	groupSize: 4,
-	// Hot sampling: enough variety within each group for GRPO to have something to prefer.
+	// Every pair, asked in both A/B orders: the judge's lean toward whichever
+	// answer comes first cancels instead of adding noise to the reward.
+	matchesPerAnswer: 4,
+	bothOrders: true,
+	// 5 answers: 10 pairs among them plus 5 against the original model.
+	groupSize: 5,
 	maxNew: 128,
-	temperature: 1.0,
+	// Warm, not hot: enough variety within each group for GRPO to have something
+	// to prefer, without the 135M model's incoherent samples at 1.0.
+	temperature: 0.7,
 	loraLearningRate: 3e-4,
 	fullLearningRate: 1e-5,
 	loraRank: 16,
@@ -53,25 +55,14 @@ export const DEFAULT_CONFIG: Config = {
 	klBeta: 0.05
 };
 
-// v3: start everyone on the "yes or no first" preset.
-const KEY = 'grpo-playground:config:v3';
-/** Where settings lived before the rename; read once so nothing is lost. */
-const OLD_KEY = 'jax-rl-model:config:v3';
+// v4: everyone restarts on the current defaults (judge prompts that check
+// correctness, both-order judging, 5 answers at temperature 0.7).
+const KEY = 'grpo-playground:config:v4';
 
 function load(): Config {
 	try {
-		const raw = localStorage.getItem(KEY) ?? localStorage.getItem(OLD_KEY);
-		if (raw) {
-			const saved = JSON.parse(raw);
-			// Settings saved before the smaller-group default: move them to 4 answers.
-			if (!('bothOrders' in saved)) saved.groupSize = DEFAULT_CONFIG.groupSize;
-			// Answers are cut off at 128 tokens (it was 256 for a while).
-			saved.maxNew = DEFAULT_CONFIG.maxNew;
-			if (saved.judgeId !== DEFAULT_CONFIG.judgeId) saved.judgeId = DEFAULT_CONFIG.judgeId;
-			// Only the 135M model is offered for training for now.
-			if (saved.policyId !== DEFAULT_CONFIG.policyId) saved.policyId = DEFAULT_CONFIG.policyId;
-			return { ...DEFAULT_CONFIG, ...saved };
-		}
+		const raw = localStorage.getItem(KEY);
+		if (raw) return { ...DEFAULT_CONFIG, ...JSON.parse(raw) };
 	} catch {
 		// Storage can be unavailable (private mode, blocked site data).
 	}
