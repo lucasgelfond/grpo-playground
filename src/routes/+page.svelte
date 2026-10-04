@@ -4,7 +4,7 @@
 	import { formatBytes, getModel, type ModelDef } from '$lib/models/registry';
 	import { estimateCost, type Mode } from '$lib/rl/trainer';
 	import { config } from '$lib/state/config.svelte';
-	import { downloadAll, downloads } from '$lib/state/downloads.svelte';
+	import { checkCached, downloads } from '$lib/state/downloads.svelte';
 	import { runtime } from '$lib/state/runtime.svelte';
 
 	const pick = (ids: string[]) => ids.map(getModel);
@@ -14,7 +14,7 @@
 
 	onMount(() => {
 		deviceMemory = (navigator as Navigator & { deviceMemory?: number }).deviceMemory;
-		void downloadAll([config.policyId, config.judgeId]);
+		void checkCached([...trainees, ...judges].map((m) => m.id));
 	});
 	// Browsers only expose a rounded RAM figure, capped at 8 GB (Chrome); no GPU memory.
 	let deviceMemory = $state<number | undefined>();
@@ -41,11 +41,21 @@
 	const fmtParams = (n: number) => (n >= 1e9 ? `${(n / 1e9).toFixed(2)}B` : `${(n / 1e6).toFixed(1)}M`);
 </script>
 
-{#snippet modelRow(m: ModelDef)}
+{#snippet modelRow(m: ModelDef, role: 'policy' | 'judge')}
 	{@const d = downloads[m.id]}
 	<div class="max-w-sm space-y-1 text-[0.85rem]">
 		<div class="flex items-baseline justify-between gap-3">
-			<span>{m.label}</span>
+			<label class="flex cursor-pointer items-center gap-2">
+				<!-- bind:group doesn't work inside a snippet, so set the choice by hand. -->
+				<input
+					type="radio"
+					name={role}
+					value={m.id}
+					checked={(role === 'policy' ? config.policyId : config.judgeId) === m.id}
+					onchange={() => (role === 'policy' ? (config.policyId = m.id) : (config.judgeId = m.id))}
+				/>
+				{m.label}
+			</label>
 			<span class="text-xs whitespace-nowrap text-gray-500 tabular-nums">
 				{#if d?.error}<span class="text-danger">download failed</span>
 				{:else if d?.done}<span class="text-up">downloaded</span> · {formatBytes(m.downloadBytes)}
@@ -67,11 +77,11 @@
 	<section class="grid gap-6 sm:grid-cols-2">
 		<fieldset class="space-y-2">
 			<legend class="label mb-2">fine-tune</legend>
-			{#each trainees as m (m.id)}{@render modelRow(m)}{/each}
+			{#each trainees as m (m.id)}{@render modelRow(m, 'policy')}{/each}
 		</fieldset>
 		<fieldset class="space-y-2">
 			<legend class="label mb-2">judge</legend>
-			{#each judges as m (m.id)}{@render modelRow(m)}{/each}
+			{#each judges as m (m.id)}{@render modelRow(m, 'judge')}{/each}
 		</fieldset>
 	</section>
 
