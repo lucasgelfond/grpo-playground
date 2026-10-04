@@ -299,6 +299,20 @@ class Runtime {
 		this.playing = false;
 	}
 
+	/**
+	 * Get ahead of the train page: load the models (from cache, or downloading
+	 * them) and precompute the judge's prompt and the original model's answer
+	 * for the first prompts. Safe to call repeatedly; it waits its turn.
+	 * `warmOnly` skips (re)loading, for refreshing after prompt edits.
+	 */
+	async preload(warmOnly = false): Promise<void> {
+		if (!warmOnly) await this.load();
+		if (!this.ready || this.running) return;
+		const prompts = config.prompts.map((p) => p.trim()).filter(Boolean);
+		const input = { prompts, constitution: config.constitution, maxNew: config.maxNew };
+		await this.#exclusive(() => engine('warm', input)).catch((e) => console.warn('Warm-up failed', e));
+	}
+
 	/** Training passes and chat share the GPU and the policy's weights, so they take turns. */
 	#exclusive<T>(fn: () => Promise<T>): Promise<T> {
 		const next = this.#gpuTurn.then(fn, fn);

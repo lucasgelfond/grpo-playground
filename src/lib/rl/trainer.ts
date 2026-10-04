@@ -293,10 +293,11 @@ export class PolicyTrainer {
 		return (await out.jsAsync()) as number[][];
 	}
 
-	dispose() {
+	/** Free everything; `keepWeights` leaves the (frozen, LoRA-mode) base weights for reuse. */
+	dispose(keepWeights = false) {
 		tree.dispose(this.#optState);
 		if (this.lora) tree.dispose(this.lora);
-		tree.dispose(this.weights);
+		if (!keepWeights) tree.dispose(this.weights);
 		if (this.base) tree.dispose(this.base);
 	}
 }

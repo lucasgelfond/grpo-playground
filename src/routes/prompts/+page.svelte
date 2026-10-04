@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
-	import { tick } from 'svelte';
+	import { onMount, tick } from 'svelte';
 
 	import ClipboardCopyIcon from '@lucide/svelte/icons/clipboard-copy';
 	import CheckIcon from '@lucide/svelte/icons/check';
@@ -69,6 +69,16 @@
 		await tick();
 		list.querySelectorAll('input')[after + 1]?.focus();
 	}
+
+	// Load the models and precompute the first passes' work while prompts are edited.
+	onMount(() => void runtime.preload());
+	$effect(() => {
+		// Re-runs when the prompts, the judge prompt or the answer length change.
+		JSON.stringify([config.prompts, config.constitution, config.maxNew]);
+		if (!runtime.ready) return;
+		const t = setTimeout(() => void runtime.preload(true), 800);
+		return () => clearTimeout(t);
+	});
 
 	async function start() {
 		await goto('/train');

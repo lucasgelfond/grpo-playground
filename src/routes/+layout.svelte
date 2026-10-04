@@ -1,6 +1,7 @@
 <script lang="ts">
 	import '../app.css';
 	import { page } from '$app/state';
+	import { runtime } from '$lib/state/runtime.svelte';
 
 	let { children } = $props();
 
@@ -11,6 +12,11 @@
 		{ href: '/evaluate', label: 'evaluate' }
 	];
 	const current = $derived(STEPS.findIndex((s) => s.href === page.url.pathname));
+	// Models load in the background from the prompts page on; show where that's at everywhere.
+	const loadedPct = $derived.by(() => {
+		const total = runtime.loads.reduce((s, l) => s + l.total, 0);
+		return total ? Math.round((100 * runtime.loads.reduce((s, l) => s + l.loaded, 0)) / total) : 0;
+	});
 </script>
 
 <svelte:head>
@@ -41,6 +47,10 @@
 						{step.label}
 					</a>
 				{/each}
+				<span class="ml-auto text-gray-500 tabular-nums">
+					{#if runtime.loading}loading models · {loadedPct}%
+					{:else if runtime.ready}<span class="text-up">●</span> models ready{/if}
+				</span>
 			</nav>
 		</header>
 		{@render children()}
