@@ -16,7 +16,6 @@ export type GenOptions = {
 	temperature: number;
 	stopTokens: number[];
 	padToken: number;
-	signal?: AbortSignal;
 	/** Called after every decode step with the tokens so far. */
 	onStep?: (tokens: number[][], done: boolean[]) => void;
 };
@@ -112,7 +111,7 @@ export async function generate(
 				if (opts.stopTokens.includes(tok)) stopped[b] = true;
 			}
 			opts.onStep?.(tokens, stopped);
-			if (stopped.every(Boolean) || t === maxNew - 1 || opts.signal?.aborted) break;
+			if (stopped.every(Boolean) || t === maxNew - 1) break;
 			[logits, caches] = model.decode(
 				tree.ref(weights),
 				lora ? tree.ref(lora) : null,

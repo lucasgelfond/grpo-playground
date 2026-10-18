@@ -5,7 +5,7 @@
 	import { formatBytes, getModel, TRAINEES } from '$lib/models/registry';
 	import { estimateCost, type Mode } from '$lib/rl/trainer';
 	import { config } from '$lib/state/config.svelte';
-	import { checkCached } from '$lib/state/downloads.svelte';
+	import { checkCached } from '$lib/state/cached.svelte';
 	import { runtime } from '$lib/state/runtime.svelte';
 
 

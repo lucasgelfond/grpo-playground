@@ -26,12 +26,3 @@ export function compileReward(code: string): RewardFn {
 	};
 }
 
-/** Compile `code` and run it on a sample, returning the error message if either fails. */
-export function rewardError(code: string, answer = 'Sure! Here is an answer.', prompt = 'Can you help me?'): string | null {
-	try {
-		compileReward(code)(answer, prompt);
-		return null;
-	} catch (e) {
-		return e instanceof Error ? e.message : String(e);
-	}
-}

@@ -6,7 +6,7 @@
 	import { PRESETS } from '$lib/presets';
 	import { compileReward, type RewardKind } from '$lib/rl/rewards';
 	import { applyPreset, config, TASK_MAX } from '$lib/state/config.svelte';
-	import { checkCached } from '$lib/state/downloads.svelte';
+	import { checkCached } from '$lib/state/cached.svelte';
 
 	const KINDS: { kind: RewardKind; title: string; name: string }[] = [
 		{ kind: 'human', title: 'Human feedback', name: 'RLHF' },
