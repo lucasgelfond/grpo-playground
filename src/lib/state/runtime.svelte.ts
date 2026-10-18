@@ -225,7 +225,9 @@ class Runtime {
 					loraRank: config.loraRank,
 					loraAlpha: config.loraAlpha,
 					klBeta: config.klBeta,
-					reward: config.reward
+					reward: config.reward,
+					task: config.task.trim(),
+					rewardCode: config.reward === 'code' ? config.rewardCode : undefined
 				},
 				initialModelId: policyId,
 				judgeModelId: judgeId,
