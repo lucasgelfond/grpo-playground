@@ -6,8 +6,8 @@ import { PGliteWorker } from '@electric-sql/pglite/worker';
  *   projects  one training session: which models, method and settings
  *   models    the models in a project: its initial model, its judge, and the
  *             trained policy (petname, dates, passes, OPFS path of its weights)
- *   prompts   a project's prompts, typed JUDGE (the judge prompt) or
- *             EVALUATION (the prompts it trains on)
+ *   prompts   a project's prompts, typed JUDGE (the judge prompt, for AI
+ *             feedback) or EVALUATION (the prompts it trains on)
  *   passes    every pass: prompt, answers, the judge's choices and metrics
  *
  * Model weights stay in OPFS (see saved.ts); rows only point at them.

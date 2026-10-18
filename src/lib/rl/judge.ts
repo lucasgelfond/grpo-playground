@@ -19,8 +19,8 @@ const JUDGE_BUCKET = 64;
  * - Pairwise: it sees two answers and is asked "which follows the guidelines
  *   better? A or B": P(A) = sigmoid(logit A − logit B).
  *
- * Which is sharper depends on the judge. Picking the rule-passing answer of a
- * pair where only one passes, Qwen3 1.7B scored 70–100% pointwise against
+ * Which is sharper depends on the judge. Picking the answer that follows the
+ * guidelines from a pair where only one does, Qwen3 1.7B scored 70–100% pointwise against
  * 52–90% pairwise; Qwen2.5 1.5B was the other way around. Pointwise also costs
  * one row per answer rather than two per pair. Small judges lean hard toward
  * one position (Qwen3 picked the second answer ~70% of the time), so pairs are

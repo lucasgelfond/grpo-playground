@@ -4,7 +4,7 @@
 
 ## Tweets
 
-> got curious about RL fine-tuning so I built a tiny version in the browser. model answers each prompt 4x, a bigger judge scores the answers (Jev/logit classifier style), and GRPO updates the weights
+> got curious about RL fine-tuning so I built a tiny version in the browser. model answers each prompt 5x, a bigger judge scores the answers (Jev/logit classifier style), and GRPO updates the weights
 
 > you can A/B test inference on the fine-tuned model too. runs all locally with webgpu, built on @ekzhang's jax-js - try it at grpo dot lucasgelfond dot online
 
