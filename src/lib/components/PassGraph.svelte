@@ -15,7 +15,8 @@
 		createdAt,
 		judgeSummary,
 		algorithm,
-		onrename
+		onrename,
+		onpick
 	}: {
 		pass: Pass | undefined;
 		groupSize: number;
@@ -37,6 +38,8 @@
 		// DPO works but isn't exposed in the UI (mostly because GRPO playground was a better name, LOL). if you do ?mode=dpo or go to dpo.lucasgelfond.online you can try the DPO version
 		algorithm: string;
 		onrename: (name: string) => void;
+		/** Human feedback: set while the pass waits for a pick; called with the answer's index. */
+		onpick?: (i: number) => void;
 	} = $props();
 
 	/** Answer the pointer is over (raised above its neighbors so its popovers show). */
@@ -277,6 +280,16 @@
 					<div class="flex items-center gap-2 text-[1.04rem] whitespace-nowrap text-ink-soft">
 						<span class="min-w-0 truncate font-medium tabular-nums">{isRef ? 'GT · original model' : letter(i)}</span>
 						{#if isBest}<span class="rounded bg-blue-900/50 px-1 text-[14.4px] text-blue-300">chosen</span>{/if}
+						{#if onpick && !isRef && a?.text}
+							<button
+								type="button"
+								class="rounded bg-accent px-1.5 text-[14.4px] font-medium text-white hover:brightness-110"
+								onclick={(e) => {
+									e.stopPropagation();
+									onpick(i);
+								}}>pick</button
+							>
+						{/if}
 						<span class="ml-auto tabular-nums">
 							{#if a?.advantage !== undefined && !pass?.skipped}
 								<span class={a.advantage > 0 ? 'text-up' : a.advantage < 0 ? 'text-down' : ''}>
@@ -301,7 +314,7 @@
 					<div class="mt-auto flex items-center gap-2">
 						<div class="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
 							<div
-								class="h-full origin-left rounded-full bg-gray-200 transition-transform duration-500"
+								class={['h-full origin-left rounded-full bg-gray-200', a?.verdict && 'transition-transform duration-500']}
 								style:transform="scaleX({a?.verdict?.score ?? 0})"
 							></div>
 						</div>

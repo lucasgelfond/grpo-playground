@@ -12,11 +12,21 @@ import { getModel, promptFor, type ChatTurn, type ModelDef } from '$lib/models/r
 import { loadTokenizer, type Tokenizer } from '$lib/models/tokenizer';
 import { downloadWeights, isCached, loadWeights, type LoadProgress, type Weights } from '$lib/models/weights';
 import { generate } from '$lib/rl/generate';
-import { compareAnswers, judgePrefix, schedulePairs, winRates, type JudgePrefix, type Match, type Verdict } from '$lib/rl/judge';
-import { RULES } from '$lib/rl/rules';
+import {
+	compareAnswers,
+	judgePrefix,
+	schedulePairs,
+	scoreAnswers,
+	winRates,
+	type JudgeMode,
+	type JudgePrefix,
+	type Match,
+	type Verdict
+} from '$lib/rl/judge';
+import { compileReward } from '$lib/rl/rewards';
 import { PolicyTrainer } from '$lib/rl/trainer';
 import { loadSavedWeights, saveModel, type SavedMeta } from '$lib/saved';
-import type { Config } from '$lib/state/config.svelte';
+import { judgeModeOf, type Config } from '$lib/state/config.svelte';
 import type { Answer, LoadItem, Pass } from '$lib/state/runtime.svelte';
 
 type ChatSide = { weights: Weights; lora: Lora | null };
@@ -24,6 +34,8 @@ type ChatSide = { weights: Weights; lora: Lora | null };
 export type LoadInput = {
 	policyId: string;
 	judgeId: string;
+	/** The judge is only loaded for AI feedback. */
+	needsJudge: boolean;
 	mode: 'lora' | 'full';
 	loraRank: number;
 	loraAlpha: number;
@@ -47,6 +59,23 @@ function throttled(post: () => void): () => void {
 		}, 33);
 	};
 }
+
+/**
+ * DPO's preferences between trained answers: the judge's own pairs if it
+ * compared answers, else every pair the scores tell apart.
+ */
+function preferencePairs(scores: number[], matches: Match[]): Match[] {
+	if (matches.some((m) => m.a < scores.length && m.b < scores.length)) return matches;
+	return scores.flatMap((si, i) => scores.flatMap((sj, j) => (j > i && si !== sj ? [{ a: i, b: j, p: si > sj ? 1 : 0 }] : [])));
+}
+
+/** A sampled pass and what's needed to train on it once it's scored. */
+type Scored = {
+	input: { index: number; prompt: string; config: Config; save: SaveTarget };
+	pass: Pass;
+	promptIds: number[];
+	completions: number[][];
+};
 
 /** Judge prefixes kept prefilled (each ~10–40 MB of K/V). */
 const PREFIX_CACHE = 8;
@@ -127,7 +156,7 @@ export class Engine {
 			b({ done: true });
 		}
 
-		if (!keepJudge) {
+		if (!keepJudge && input.needsJudge) {
 			progress({ status: `Loading ${judgeDef.label}…` });
 			const j = track(`${judgeDef.label} (judge, f16)`, judgeDef.downloadBytes);
 			this.#judgeWeights = await loadWeights(judgeDef, np.float16, j);
@@ -144,7 +173,7 @@ export class Engine {
 			microbatch: policyDef.config.hidden > 600 ? 4 : 8
 		});
 		this.#policyDef = policyDef;
-		this.#judgeDef = judgeDef;
+		if (this.#judgeWeights) this.#judgeDef = judgeDef;
 	}
 
 	/**
@@ -152,19 +181,19 @@ export class Engine {
 	 * user is still on another page: the judge's prefilled instructions and the
 	 * original model's answer for each. Both are cached, so a pass reuses them.
 	 */
-	async warm(input: { prompts: string[]; constitution: string; maxNew: number }): Promise<void> {
-		if (!this.#trainer || !this.#policyDef || !this.#policyTok || !this.#judgeModel) return;
+	async warm(input: { prompts: string[]; constitution: string; judgeMode: JudgeMode | null; maxNew: number }): Promise<void> {
+		if (!this.#trainer || !this.#policyDef || !this.#policyTok) return;
 		for (const prompt of input.prompts.slice(0, PREFIX_CACHE)) {
-			await this.#prefixFor(input.constitution, prompt);
+			if (input.judgeMode && this.#judgeModel) await this.#prefixFor(input.judgeMode, input.constitution, prompt);
 			await this.#referenceFor(prompt, this.#policyTok.encode(promptFor(this.#policyDef, [{ role: 'user', content: prompt }])), input.maxNew);
 		}
 	}
 
-	async #prefixFor(constitution: string, question: string): Promise<JudgePrefix> {
-		const key = `${constitution}\u0000${question}`;
+	async #prefixFor(mode: JudgeMode, constitution: string, question: string): Promise<JudgePrefix> {
+		const key = `${mode}\u0000${constitution}\u0000${question}`;
 		let prefix = this.#prefixes.get(key);
 		if (!prefix) {
-			prefix = await judgePrefix(this.#judgeModel!, this.#judgeWeights!, this.#judgeTok!, this.#judgeDef!.padToken, constitution, question);
+			prefix = await judgePrefix(this.#judgeModel!, this.#judgeWeights!, this.#judgeTok!, this.#judgeDef!.padToken, mode, constitution, question);
 			this.#prefixes.set(key, prefix);
 			// Bounded: each prefix is ~10 MB of K/V for Qwen2.5 1.5B, ~40 MB for Qwen3 1.7B.
 			if (this.#prefixes.size > PREFIX_CACHE) {
@@ -200,6 +229,11 @@ export class Engine {
 	}
 
 	/** Sample a group of answers, judge them, apply one GRPO update, and autosave. */
+	/**
+	 * Sample a group of answers and score them (AI judge or reward code), then
+	 * update and autosave. With human feedback it stops after sampling, with
+	 * `awaitingChoice` set, and `finishPass` takes your pick.
+	 */
 	async runPass(
 		input: { index: number; prompt: string; config: Config; save: SaveTarget },
 		progress: (u: PassUpdate) => void
@@ -207,10 +241,11 @@ export class Engine {
 		const trainer = this.#trainer;
 		const def = this.#policyDef;
 		const tok = this.#policyTok;
-		if (!trainer || !def || !tok || !this.#judgeModel || !this.#judgeWeights || !this.#judgeTok) {
-			throw new Error('Models are not loaded.');
-		}
 		const { index, prompt, config } = input;
+		if (!trainer || !def || !tok) throw new Error('Models are not loaded.');
+		if (config.reward === 'ai' && (!this.#judgeModel || !this.#judgeWeights || !this.#judgeTok)) {
+			throw new Error('The judge is not loaded.');
+		}
 		const G = config.groupSize;
 		const pass: Pass = {
 			index,
@@ -226,7 +261,8 @@ export class Engine {
 		// its own prompt for this question (cached after the first time). Then
 		// the answers sample in parallel, alongside the original model's answers.
 		status(`Pass ${index + 1}: prefilling`);
-		const judgeReady = this.#prefixFor(config.constitution, prompt);
+		const judgeMode = judgeModeOf(config);
+		const judgeReady = config.reward === 'ai' ? this.#prefixFor(judgeMode, config.constitution, prompt) : null;
 		const referenceReady = this.#referenceFor(prompt, promptIds, config.maxNew);
 		const { weights, lora } = trainer.policy();
 		const genReady = generate(trainer.model, weights, lora, promptIds, {
@@ -258,52 +294,67 @@ export class Engine {
 		});
 
 		pass.phase = 'judging';
+		const scored = { input, pass, promptIds, completions: gen.tokens };
+		if (config.reward === 'human') {
+			pass.awaitingChoice = true;
+			status(`Pass ${index + 1}: pick the best answer`);
+			this.#awaiting = scored;
+			return pass;
+		}
 		sync();
-		// Presets with a rule check reward judge and rule together (averaged).
-		const rule = config.rule ? RULES[config.rule] : null;
-		const reward = (i: number, judged: number): Verdict => ({
-			score: rule ? (judged + rule(pass.answers[i].text, pass.answers[i].stopped)) / 2 : judged
-		});
-		// Every pair of answers, plus each answer against the original model's.
-		const pairs: [number, number][] = [
-			...schedulePairs(G, Math.min(config.matchesPerAnswer, G - 1)),
-			...pass.answers.map((_, i) => [i, G] as [number, number])
-		];
+		const texts = [...pass.answers.map((a) => a.text), reference.text];
 		pass.matches = [];
-		pass.matchesTotal = pairs.length;
-		status(`Pass ${index + 1}: judge choosing between ${pairs.length} pairs`);
-		const matches = await compareAnswers(
-			this.#judgeModel,
-			this.#judgeWeights,
-			this.#judgeTok,
-			this.#judgeDef!.padToken,
-			config.constitution,
-			prompt,
-			[...pass.answers.map((a) => a.text), reference.text],
-			pairs,
-			{
-				bothOrders: config.bothOrders,
-				assistantPrefix: this.#judgeDef!.assistantPrefix,
-				prefix,
-				onMatch: (m) => {
-					pass.matches!.push(m);
-					// Live standings: win rates over the matches played so far.
-					const rates = winRates(G + 1, pass.matches!);
-					pass.answers.forEach((a, i) => {
-						if (pass.matches!.some((x) => x.a === i || x.b === i)) a.verdict = reward(i, rates[i]);
-					});
-					reference.verdict = { score: rates[G] };
-					sync();
-				}
-			}
-		);
-		const rates = winRates(G + 1, matches);
+		let rates: number[];
+		let matches: Match[];
+		if (config.reward === 'code') {
+			status(`Pass ${index + 1}: scoring answers with your code`);
+			const reward = compileReward(config.rewardCode);
+			rates = texts.map((t) => reward(t, prompt));
+			// Against the original's answer: 1 if better, 0 if worse, 0.5 if tied.
+			matches = rates.slice(0, G).map((r, i) => ({ a: i, b: G, p: r > rates[G] ? 1 : r < rates[G] ? 0 : 0.5 }));
+		} else {
+			const onUpdate = (partial: (number | undefined)[], played: Match[]) => {
+				pass.matches = played;
+				pass.answers.forEach((a, i) => {
+					if (partial[i] !== undefined) a.verdict = { score: partial[i] };
+				});
+				if (partial[G] !== undefined) reference.verdict = { score: partial[G] };
+				sync();
+			};
+			const judge = judgeMode === 'pointwise' ? this.#judgePointwise : this.#judgePairwise;
+			({ rates, matches } = await judge.call(this, config, prompt, texts, prefix!, pass, status, onUpdate));
+		}
+		pass.matches = matches;
 		const vsRef = matches.filter((m) => m.b === G);
 		pass.vsOriginal = vsRef.reduce((s, m) => s + m.p, 0) / Math.max(1, vsRef.length);
 		reference.verdict = { score: rates[G] };
-		const verdicts = rates.slice(0, G).map((r, i) => reward(i, r));
-		verdicts.forEach((v, i) => (pass.answers[i].verdict = v));
-		const scores = verdicts.map((v) => v.score);
+		return this.#update(scored, rates.slice(0, G), matches, progress);
+	}
+
+	/** Human feedback: train on your pick (an answer's index), or skip the pass (null). */
+	async finishPass(input: { best: number | null }, progress: (u: PassUpdate) => void): Promise<Pass> {
+		const scored = this.#awaiting;
+		if (!scored) throw new Error('No pass is waiting for a pick.');
+		this.#awaiting = null;
+		scored.pass.awaitingChoice = false;
+		const scores = scored.pass.answers.map((_, i) => (i === input.best ? 1 : 0));
+		// "Picked over" pairs, for DPO.
+		const matches = input.best === null ? [] : scores.flatMap((_, i) => (i === input.best ? [] : [{ a: input.best!, b: i, p: 1 }]));
+		return this.#update(scored, scores, matches, progress);
+	}
+
+	/** Pass state between scoring and the update (held across a human's pick). */
+	#awaiting: Scored | null = null;
+
+	/** One GRPO (or DPO) step on scored answers, then autosave. */
+	async #update(scored: Scored, scores: number[], matches: Match[], progress: (u: PassUpdate) => void): Promise<Pass> {
+		const trainer = this.#trainer!;
+		const def = this.#policyDef!;
+		const { input, pass, promptIds, completions } = scored;
+		const { index, config } = input;
+		const sync = throttled(() => progress({ pass }));
+		const status = (s: string) => progress({ status: s });
+		scores.forEach((score, i) => (pass.answers[i].verdict = { score } satisfies Verdict));
 		pass.meanScore = scores.reduce((s, x) => s + x, 0) / scores.length;
 		pass.best = scores.indexOf(Math.max(...scores));
 
@@ -312,8 +363,8 @@ export class Engine {
 		status(`Pass ${index + 1}: updating weights`);
 		const res =
 			config.algorithm === 'dpo'
-				? await this.#dpoUpdate(promptIds, gen.tokens, matches, config, pass)
-				: await trainer.update(promptIds, gen.tokens, scores, def.padToken, config.klBeta);
+				? await this.#dpoUpdate(promptIds, completions, preferencePairs(scores, matches), config, pass)
+				: await trainer.update(promptIds, completions, scores, def.padToken, config.klBeta);
 		res.advantages.forEach((adv, i) => {
 			const a = pass.answers[i];
 			a.advantage = adv;
@@ -328,6 +379,101 @@ export class Engine {
 		pass.phase = 'done';
 		await this.save(input.save).catch((e) => console.warn('Autosave failed', e));
 		return pass;
+	}
+
+	/**
+	 * Every pair of answers, plus each answer against the original model's
+	 * (the last of `texts`). Each answer's score is its win rate.
+	 */
+	async #judgePairwise(
+		config: Config,
+		prompt: string,
+		texts: string[],
+		prefix: JudgePrefix,
+		pass: Pass,
+		status: (s: string) => void,
+		onUpdate: (rates: (number | undefined)[], matches: Match[]) => void
+	) {
+		const G = texts.length - 1;
+		const pairs: [number, number][] = [
+			...schedulePairs(G, Math.min(config.matchesPerAnswer, G - 1)),
+			...Array.from({ length: G }, (_, i) => [i, G] as [number, number])
+		];
+		pass.matchesTotal = pairs.length;
+		status(`Pass ${pass.index + 1}: judge choosing between ${pairs.length} pairs`);
+		const played: Match[] = [];
+		const matches = await compareAnswers(
+			this.#judgeModel!,
+			this.#judgeWeights!,
+			this.#judgeTok!,
+			this.#judgeDef!.padToken,
+			config.constitution,
+			prompt,
+			texts,
+			pairs,
+			{
+				bothOrders: config.bothOrders,
+				assistantPrefix: this.#judgeDef!.assistantPrefix,
+				prefix,
+				onMatch: (m) => {
+					played.push(m);
+					// Live standings: win rates over the matches played so far.
+					const rates = winRates(G + 1, played);
+					onUpdate(
+						rates.map((r, i) => (played.some((x) => x.a === i || x.b === i) ? r : undefined)),
+						[...played]
+					);
+				}
+			}
+		);
+		return { rates: winRates(G + 1, matches), matches };
+	}
+
+	/**
+	 * The original model's answer (the last of `texts`), then each answer,
+	 * scored on its own. An answer's score is P(Yes). Its "match" against the
+	 * original is sigmoid(its log-odds − the original's), the chance it's the
+	 * better of the two, so the graph and the vs-original chart read as before.
+	 */
+	async #judgePointwise(
+		config: Config,
+		prompt: string,
+		texts: string[],
+		prefix: JudgePrefix,
+		pass: Pass,
+		status: (s: string) => void,
+		onUpdate: (rates: (number | undefined)[], matches: Match[]) => void
+	) {
+		const G = texts.length - 1;
+		const sigmoid = (x: number) => 1 / (1 + Math.exp(-x));
+		pass.matchesTotal = G;
+		status(`Pass ${pass.index + 1}: judge scoring ${G + 1} answers`);
+		// The original goes first, so each answer's match is ready as soon as it's scored.
+		const order = [G, ...Array.from({ length: G }, (_, i) => i)];
+		const view = (logOdds: number[]) => {
+			const rates: number[] = [];
+			logOdds.forEach((l, k) => (rates[order[k]] = sigmoid(l)));
+			const matches = logOdds.slice(1).map((l, k) => ({ a: k, b: G, p: sigmoid(l - logOdds[0]) }));
+			return { rates, matches };
+		};
+		const logOdds = await scoreAnswers(
+			this.#judgeModel!,
+			this.#judgeWeights!,
+			this.#judgeTok!,
+			this.#judgeDef!.padToken,
+			config.constitution,
+			prompt,
+			order.map((i) => texts[i]),
+			{
+				assistantPrefix: this.#judgeDef!.assistantPrefix,
+				prefix,
+				onScores: (lo) => {
+					const v = view(lo);
+					onUpdate(v.rates, v.matches);
+				}
+			}
+		);
+		return view(logOdds);
 	}
 
 	// DPO works but isn't exposed in the UI (mostly because GRPO playground was a better name, LOL). if you do ?mode=dpo or go to dpo.lucasgelfond.online you can try the DPO version

@@ -146,6 +146,6 @@
 	{/if}
 
 	<div class="flex justify-end">
-		<a href="/prompts" class="btn-primary">next: prompts & judge →</a>
+		<a href="/reward" class="btn-primary">next: reward →</a>
 	</div>
 </div>

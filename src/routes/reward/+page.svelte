@@ -1,0 +1,126 @@
+<script lang="ts">
+	import { PRESETS, presetOf } from '$lib/presets';
+	import { compileReward, type RewardKind } from '$lib/rl/rewards';
+	import { applyPreset, config } from '$lib/state/config.svelte';
+
+	const KINDS: { kind: RewardKind; title: string; name: string; blurb: string }[] = [
+		{ kind: 'human', title: 'Human feedback', name: 'RLHF', blurb: 'You pick the best answer of each pass.' },
+		{ kind: 'ai', title: 'AI feedback', name: 'RLAIF', blurb: 'A judge model scores each answer against your judge prompt.' },
+		{ kind: 'code', title: 'Code', name: 'RLVR', blurb: 'A JavaScript function scores each answer: "verifiable rewards".' }
+	];
+
+	const ofKind = (kind: RewardKind) => PRESETS.filter((p) => p.reward === kind);
+	const active = $derived(presetOf(config));
+	const codePresets = ofKind('code');
+	const codeIndex = $derived(codePresets.findIndex((p) => p.code === config.rewardCode));
+
+	function pickKind(kind: RewardKind) {
+		if (config.reward === kind) return;
+		applyPreset(config, ofKind(kind)[0]);
+	}
+	function flip(step: number) {
+		const i = codeIndex < 0 ? 0 : (codeIndex + step + codePresets.length) % codePresets.length;
+		applyPreset(config, codePresets[i]);
+	}
+	function custom() {
+		config.rewardCode = `// Score an answer: return a number from 0 to 1, or true / false.\nreturn answer.length < 200;`;
+		config.check = null;
+	}
+
+	// Try the reward code on an answer as you type.
+	let sample = $state('Sure! Rainbows form when sunlight passes through raindrops.');
+	const trial = $derived.by(() => {
+		try {
+			return { score: compileReward(config.rewardCode)(sample, config.prompts[0] ?? '') };
+		} catch (e) {
+			return { error: e instanceof Error ? e.message : String(e) };
+		}
+	});
+</script>
+
+<div class="max-w-3xl space-y-7">
+	<p class="max-w-2xl text-xs leading-relaxed text-gray-400">
+		Each pass, the model answers one prompt five times. Something scores those answers, and the update makes the
+		higher-scoring ones more likely. Where do the scores come from?
+	</p>
+
+	<div class="grid gap-3 sm:grid-cols-3">
+		{#each KINDS as k (k.kind)}
+			<button
+				type="button"
+				class={['card space-y-1 p-3 text-left transition-colors', config.reward === k.kind ? 'border-accent bg-hover' : 'hover:bg-hover']}
+				onclick={() => pickKind(k.kind)}
+			>
+				<div class="flex items-baseline justify-between gap-2">
+					<span class="font-medium">{k.title}</span>
+					<span class="font-terminal text-[0.7rem] text-ink-soft">{k.name}</span>
+				</div>
+				<p class="text-[0.8rem] leading-snug text-ink-soft">{k.blurb}</p>
+			</button>
+		{/each}
+	</div>
+
+	{#if config.reward === 'human'}
+		<section class="space-y-2 text-[0.85rem] leading-relaxed text-gray-300">
+			<p>
+				On the train page, each pass stops after the answers are written. Click the one you like best (or skip if none
+				are good). Your pick gets the reward and the rest get none.
+			</p>
+			<p class="text-ink-soft">
+				A clear, consistent taste shows up in 10–15 picks. The preset asks for short creative bits, like names and
+				one-line poems, that you can judge at a glance.
+			</p>
+		</section>
+	{:else if config.reward === 'ai'}
+		<section class="space-y-2">
+			<div class="flex h-6 items-center justify-between">
+				<h2 class="label">judge prompt</h2>
+				{#if active}<span class="text-xs text-ink-soft">preset: {active.label.toLowerCase()}</span>{/if}
+			</div>
+			<textarea
+				class="field min-h-[10rem] resize-y p-3 leading-relaxed"
+				bind:value={config.constitution}
+				spellcheck="true"
+				placeholder="What should the judge reward? e.g. Reward answers that are short and friendly."
+			></textarea>
+			<p class="text-xs text-ink-soft">
+				The judge reads each answer and this prompt, and we use its probability of answering "Yes" as the reward.
+			</p>
+		</section>
+	{:else}
+		<section class="space-y-2">
+			<div class="flex h-7 items-center justify-between gap-3">
+				<h2 class="label">reward code</h2>
+				<div class="flex items-center gap-1 text-xs">
+					<button type="button" class="btn px-2" aria-label="Previous example" onclick={() => flip(-1)}>‹</button>
+					<span class="w-48 text-center text-ink-soft">
+						{codeIndex >= 0 ? `${codePresets[codeIndex].label.toLowerCase()} · ${codeIndex + 1}/${codePresets.length}` : 'custom'}
+					</span>
+					<button type="button" class="btn px-2" aria-label="Next example" onclick={() => flip(1)}>›</button>
+					<button type="button" class={['btn ml-2', codeIndex < 0 && 'bg-hover']} onclick={custom}>custom</button>
+				</div>
+			</div>
+			<div class="font-terminal text-[0.78rem] text-ink-soft">function (answer, prompt) {'{'}</div>
+			<textarea
+				class="field min-h-[7rem] resize-y p-3 font-terminal text-[0.8rem] leading-relaxed"
+				bind:value={config.rewardCode}
+				spellcheck="false"
+				oninput={() => (config.check = null)}
+			></textarea>
+			<div class="font-terminal text-[0.78rem] text-ink-soft">{'}'}</div>
+			<label class="block space-y-1 text-xs text-gray-400">
+				<span>try it on an answer</span>
+				<input class="field" bind:value={sample} />
+			</label>
+			<p class="text-[0.8rem]">
+				{#if 'error' in trial}<span class="text-danger">{trial.error}</span>
+				{:else}reward: <span class="tabular-nums">{trial.score.toFixed(2)}</span>{/if}
+			</p>
+		</section>
+	{/if}
+
+	<div class="flex items-center justify-between">
+		<a href="/" class="text-[0.85rem] text-ink-soft hover:text-ink">← back</a>
+		<a href="/prompts" class="btn-primary">next: prompts →</a>
+	</div>
+</div>

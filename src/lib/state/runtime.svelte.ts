@@ -1,5 +1,6 @@
 import { downloadBlob, peftConfig, zip } from '$lib/export';
 import { engine } from '$lib/engine/engine';
+import type { PassUpdate } from '$lib/engine/engine.worker';
 import { getModel, type ChatTurn, type ModelDef } from '$lib/models/registry';
 import { persistStorage } from '$lib/models/weights';
 import type { Match, Verdict } from '$lib/rl/judge';
@@ -7,7 +8,8 @@ import type { DpoMargin } from '$lib/rl/trainer';
 import { createProject, deleteProjectOfModel, listPolicyModels, recordPass, renameModel } from '$lib/db';
 import { deleteSaved, loadSavedWeights, newModelId, type SavedMeta } from '$lib/saved';
 import { petname } from '$lib/petname';
-import { config, learningRate, type Config } from './config.svelte';
+import { rewardSummary } from '$lib/presets';
+import { config, judgeModeOf, learningRate, type Config } from './config.svelte';
 
 export type Phase = 'prefill' | 'sampling' | 'judging' | 'updating' | 'done';
 
@@ -46,6 +48,8 @@ export type Pass = {
 	/** Every head-to-head choice the judge made, and how many were scheduled. */
 	matches?: Match[];
 	matchesTotal?: number;
+	/** Human feedback: sampled, and waiting for a pick on the train page. */
+	awaitingChoice?: boolean;
 	// DPO works but isn't exposed in the UI (mostly because GRPO playground was a better name, LOL). if you do ?mode=dpo or go to dpo.lucasgelfond.online you can try the DPO version
 	/** The preference pairs trained on, with margins before and after. */
 	dpo?: DpoMargin[];
@@ -70,8 +74,9 @@ function trainingKey(c: Config): string {
 		learningRate(c),
 		c.temperature,
 		c.prompts.map((p) => p.trim()).filter(Boolean),
+		c.reward,
 		c.constitution.trim(),
-		c.rule,
+		c.rewardCode.trim(),
 		c.algorithm
 	]);
 }
@@ -155,6 +160,7 @@ class Runtime {
 				{
 					policyId: config.policyId,
 					judgeId: config.judgeId,
+					needsJudge: config.reward === 'ai',
 					mode: config.mode,
 					loraRank: config.loraRank,
 					loraAlpha: config.loraAlpha,
@@ -210,6 +216,7 @@ class Runtime {
 				mode: config.mode,
 				settings: {
 					groupSize: config.groupSize,
+					judgeMode: judgeModeOf(config),
 					matchesPerAnswer: config.matchesPerAnswer,
 					bothOrders: config.bothOrders,
 					maxNew: config.maxNew,
@@ -218,7 +225,7 @@ class Runtime {
 					loraRank: config.loraRank,
 					loraAlpha: config.loraAlpha,
 					klBeta: config.klBeta,
-					rule: config.rule
+					reward: config.reward
 				},
 				initialModelId: policyId,
 				judgeModelId: judgeId,
@@ -234,7 +241,7 @@ class Runtime {
 	}
 
 	#saveTarget(id: string, name: string, createdAt: string) {
-		return { id, name, createdAt, passes: this.passes.length, constitution: config.constitution };
+		return { id, name, createdAt, passes: this.passes.length, constitution: rewardSummary(config) };
 	}
 
 	/** Sample a group of answers, judge them, and apply one GRPO update. */
@@ -258,7 +265,11 @@ class Runtime {
 				answers: Array.from({ length: config.groupSize }, () => ({ tokens: [], text: '', stopped: false, pieces: [] }))
 			});
 			const pass = this.passes[index];
-			const done = await engine(
+			const onProgress = (u: PassUpdate) => {
+				if (u.status !== undefined) this.status = u.status;
+				if (u.pass) merge(pass, u.pass);
+			};
+			let done = await engine(
 				'runPass',
 				{
 					index,
@@ -266,12 +277,16 @@ class Runtime {
 					config: $state.snapshot(config),
 					save: { ...this.#saveTarget(this.sessionId, this.sessionName, this.sessionCreatedAt), passes: index + 1 }
 				},
-				(u) => {
-					if (u.status !== undefined) this.status = u.status;
-					if (u.pass) merge(pass, u.pass);
-				}
+				onProgress
 			);
 			merge(pass, done);
+			if (done.awaitingChoice) {
+				// Human feedback: wait for a pick (or a skip) on the train page.
+				const best = await new Promise<number | null>((resolve) => (this.#choose = resolve));
+				this.#choose = null;
+				done = await engine('finishPass', { best }, onProgress);
+				merge(pass, done);
+			}
 			if (this.#projectId !== null && this.#policyRowId !== null) {
 				await recordPass(this.#projectId, this.#policyRowId, pass.index, prompt, $state.snapshot(pass)).catch((e) =>
 					console.warn('Could not record the pass', e)
@@ -304,6 +319,14 @@ class Runtime {
 		this.playing = false;
 	}
 
+	/** Resolves the pick a human-feedback pass is waiting on. */
+	#choose: ((best: number | null) => void) | null = null;
+
+	/** Human feedback: train on answer `best` of the current pass, or skip it (null). */
+	choose(best: number | null) {
+		this.#choose?.(best);
+	}
+
 	/**
 	 * Get ahead of the train page: load the models (from cache, or downloading
 	 * them) and precompute the judge's prompt and the original model's answer
@@ -314,7 +337,8 @@ class Runtime {
 		if (!warmOnly) await this.load();
 		if (!this.ready || this.running) return;
 		const prompts = config.prompts.map((p) => p.trim()).filter(Boolean);
-		const input = { prompts, constitution: config.constitution, maxNew: config.maxNew };
+		const judgeMode = config.reward === 'ai' ? judgeModeOf(config) : null;
+		const input = { prompts, constitution: config.constitution, judgeMode, maxNew: config.maxNew };
 		await this.#exclusive(() => engine('warm', input)).catch((e) => console.warn('Warm-up failed', e));
 	}
 

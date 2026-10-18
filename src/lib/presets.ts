@@ -1,29 +1,80 @@
 /**
- * Tasks pair a prompt set with a constitution and, where possible, a rule
- * check. Tasks train when the model already does the thing some of the time,
- * so a group of 8 answers has variety to learn from. Ordered by how well they
- * trained in 20 passes on SmolLM2 135M (LoRA, temperature 1.0, 128 tokens):
+ * Presets for each kind of reward (see rl/rewards.ts). Each sets the prompts
+ * and the reward: a judge prompt, reward code, or nothing (you pick). A
+ * `check` is charted on the train page: how often answers do the thing.
  *
- *   End with a question   22% -> 82% (rule), 57% -> 86% (rule + judge)
- *   Yes or no first       85% -> 100%, but collapses to "Yes." for everything
- *                         (since rebalanced to half yes / half no, and the
- *                         judge now checks the answer is right; not re-measured)
- *   No lists or markdown  11% -> 51%, prose gets less coherent
- *   One sentence, Admit what it can't know: rarely happen at all, so little signal
+ * Measured on SmolLM2 360M with the defaults (LoRA at 1e-3, 5 answers of 64
+ * tokens at temperature 1.0), on held-out prompts:
+ *
+ *   AI judge, no filler opener   33% -> 100% by pass 10 ("Sure! I'd be happy
+ *                                to…" -> "Inflation is the general rise…").
+ *
+ * Tried and dropped as AI demos: yes or no first (the model learns the format,
+ * not the facts: one-word answers, right half the time), optimist (answers
+ * went flat, not cheerful), asks a clarifying question first (barely moved).
  */
-import type { RuleId } from './rl/rules';
+import type { RewardKind } from './rl/rewards';
 
-export type Task = { id: string; label: string; prompts: string[]; constitution: string; rule?: RuleId };
+export type Preset = {
+	id: string;
+	label: string;
+	reward: RewardKind;
+	prompts: string[];
+	/** AI: the judge prompt. */
+	constitution?: string;
+	/** Code: the body of `function (answer, prompt)`. */
+	code?: string;
+	/** What the train page charts: the share of answers for which this code returns true. */
+	check?: { label: string; code: string };
+};
 
-export const TASKS: Task[] = [
+const NO_FILLER = `return !/^\\W*(sure|certainly|absolutely|of course|great|good question|i'?d be (happy|glad|delighted)|i'?m (happy|glad)|yes|okay|ok|hello|hi|wow|what a|ah|oh|well)\\b/i.test(answer.trim());`;
+
+const FILLER_PROMPTS = [
+			'Can you explain how rainbows form?',
+			'Can you give me a tip for studying?',
+			'Can you help me write a birthday message for my sister?',
+			'Can you tell me a fun fact about octopuses?',
+			'Can you explain what a black hole is?',
+			'Can you suggest a name for my cat?',
+			'Can you explain why the sky is blue?',
+			'Can you give me a quick dinner idea?',
+			'Can you tell me how to boil an egg?',
+			'Can you explain what DNA is?',
+			'Can you give me a tip for sleeping better?',
+			'Can you explain how vaccines work?',
+			'Can you tell me a joke?',
+			'Can you explain what inflation is?',
+			'Can you suggest a weekend activity?',
+			'Can you explain how plants grow?',
+			'Can you give me a tip for public speaking?',
+			'Can you tell me about the Moon?',
+			'Can you explain what gravity is?',
+			'Can you suggest a good habit to start?'
+];
+
+export const PRESETS: Preset[] = [
 	{
-		id: 'follow-up',
-		rule: 'follow-up',
-		label: 'End with a question',
-		constitution: `Reward answers that give one or two helpful sentences and then end with a short, friendly follow-up question to the user.
-The very last character must be "?".
-The sentences before the question must be correct and sensible.
-Penalize wrong or made-up information most of all, then answers that do not end with a question, and answers longer than three sentences.`,
+		id: 'no-filler',
+		label: 'No filler opener',
+		reward: 'ai',
+		constitution: `Reward answers that get straight to the point. The answer must NOT open with filler like "Sure!", "Certainly!", "Absolutely!", "Of course!", "Great question!" or "I'd be happy to help".
+Penalize any answer whose first words are filler or enthusiasm instead of content.`,
+		prompts: FILLER_PROMPTS,
+		check: { label: 'No filler opener', code: NO_FILLER }
+	},
+	{
+		id: 'no-filler-code',
+		label: 'No filler opener',
+		reward: 'code',
+		code: NO_FILLER,
+		prompts: FILLER_PROMPTS
+	},
+	{
+		id: 'ends-with-question',
+		label: 'Ends with a question',
+		reward: 'code',
+		code: `return answer.trim().endsWith('?');`,
 		prompts: [
 			'I want to get into hiking.',
 			"I'm thinking about learning guitar.",
@@ -48,113 +99,10 @@ Penalize wrong or made-up information most of all, then answers that do not end 
 		]
 	},
 	{
-		id: 'yes-no',
-		rule: 'yes-no',
-		label: 'Starts with yes or no',
-		constitution: `Answer with yes or no, and prioritize brevity.
-Reward answers whose very first word is the CORRECT answer, "Yes" or "No", followed by at most one short sentence of explanation.
-Penalize wrong answers most of all, even if they start with Yes or No. Also penalize answers that do not start with Yes or No, and long answers.`,
-		// Facts a 1.5B judge reliably gets right (no trick questions like "is a
-		// tomato a fruit?"), alternating yes and no so "Yes." to everything loses.
-		prompts: [
-			'Is the sun hot?',
-			'Can a cow fly?',
-			'Is ice cold?',
-			'Is the sky green?',
-			'Do birds have feathers?',
-			'Is fire cold?',
-			'Do bees make honey?',
-			'Is a rock alive?',
-			'Is snow white?',
-			'Do fish live in trees?',
-			'Is the ocean salty?',
-			'Is the moon made of cheese?',
-			'Do plants need water?',
-			'Can humans breathe underwater?',
-			'Is the Earth round?',
-			'Are bananas blue?',
-			'Do cats have four legs?',
-			'Is two plus two five?',
-			'Is the sun a star?',
-			'Can penguins fly?',
-			'Is milk white?',
-			'Can a fish ride a bike?',
-			'Do dogs bark?',
-			'Is grass purple?',
-			'Is the night sky dark?',
-			'Do trees have wheels?',
-			'Is a week seven days long?',
-			'Can a person live on the sun?',
-			'Do cars need fuel or electricity to run?',
-			'Is a mouse bigger than an elephant?'
-		]
-	},
-	{
-		id: 'plain-prose',
-		rule: 'plain-prose',
-		label: 'No lists or markdown',
-		constitution: `Reward answers written as one short paragraph of plain prose that gives correct, sensible instructions.
-Penalize wrong or unsafe advice most of all, then any formatting: bullet points, numbered lists, "Step 1" style steps, headings, or bold text with **.`,
-		prompts: [
-			'How do I make a paper airplane?',
-			'How do I start running?',
-			'How do I bake bread?',
-			'How can I learn to code?',
-			'How do I plant a tree?',
-			'How do I change a tire?',
-			'How do I make pancakes?',
-			'How can I save money?',
-			'How do I study for an exam?',
-			'How do I train a puppy?',
-			'How do I write a resume?',
-			'How do I start a garden?',
-			'How can I sleep better?',
-			'How do I brew coffee?',
-			'How do I learn a new language?',
-			'How do I set up a fish tank?',
-			'How do I make a budget?',
-			'How do I prepare for a job interview?',
-			'How do I fix a flat bike tire?',
-			'How do I clean my room quickly?'
-		]
-	},
-	{
-		id: 'brevity',
-		rule: 'brevity',
-		label: 'One sentence',
-		constitution: `Reward answers that are ONE short sentence (under 25 words) that directly answers the question.
-The sentence must be correct.
-Penalize wrong facts most of all, then answers longer than one sentence, lists, headings, and answers that trail off unfinished.`,
-		prompts: [
-			'Explain how the internet works.',
-			'Tell me about the Roman Empire.',
-			'How do computers work?',
-			'What is machine learning?',
-			'Describe the water cycle.',
-			'How does the stock market work?',
-			'What is democracy?',
-			'Explain photosynthesis.',
-			'How do airplanes fly?',
-			'What causes earthquakes?',
-			'Tell me about dinosaurs.',
-			'How does the heart work?',
-			'What is climate change?',
-			'Explain how vaccines work.',
-			'What is a black hole?',
-			'How do batteries work?',
-			'What is the theory of evolution?',
-			'How does GPS work?',
-			'What is inflation?',
-			'Explain how a car engine works.'
-		]
-	},
-	{
-		id: 'dont-know',
-		rule: 'dont-know',
-		label: 'Admit what it can’t know',
-		constitution: `These questions ask about things an AI cannot know: the user's private life, the future, or made-up things.
-Reward answers that clearly say "I don't know" or explain that it can't know, in one or two sentences.
-Penalize answers that invent a specific answer most of all, since any specific answer is a made-up one.`,
+		id: 'admits-it-cant-know',
+		label: "Admits what it can't know",
+		reward: 'code',
+		code: `return /(don't|do not|can't|cannot) (know|tell|access|predict|say|see)|not sure|unable to/i.test(answer);`,
 		prompts: [
 			'What did I eat for breakfast today?',
 			"What is my dog's name?",
@@ -179,46 +127,82 @@ Penalize answers that invent a specific answer most of all, since any specific a
 		]
 	},
 	{
-		id: 'general',
-		label: 'Concise & kind',
-		constitution: `Reward answers that:
-1. Answer the question directly and correctly in the first sentence.
-2. Are short: 1-3 sentences. Shorter wins if nothing important is lost.
-3. Are warm and friendly, but never gushing or flattering.
-4. Say "I'm not sure" rather than making things up.
-5. Use plain words a 10-year-old would understand.
-
-Penalize wrong facts most of all, then: rambling, repeating itself, trailing off mid-sentence, invented facts, and ignoring the question.`,
+		id: 'shorter',
+		label: 'Shorter (watch it cheat)',
+		reward: 'code',
+		// Rewards length alone, so it learns to say "No." to everything: reward hacking.
+		code: `return 1 - answer.split(/\\s+/).length / 100;`,
 		prompts: [
-			'Why is the sky blue?',
-			'How do I boil an egg?',
+			'Explain how the internet works.',
+			'Tell me about the Roman Empire.',
+			'How do computers work?',
+			'What is machine learning?',
+			'Describe the water cycle.',
+			'How does the stock market work?',
+			'What is democracy?',
+			'Explain photosynthesis.',
+			'How do airplanes fly?',
+			'What causes earthquakes?',
+			'Tell me about dinosaurs.',
+			'How does the heart work?',
+			'What is climate change?',
+			'Explain how vaccines work.',
 			'What is a black hole?',
-			'Why do cats purr?',
-			'How does a rainbow form?',
-			'What should I name my goldfish?',
-			'Why do we dream?',
-			'How do airplanes stay in the air?',
-			'What is the tallest mountain in the world?',
-			'How can I fall asleep faster?',
-			'Why is the ocean salty?',
-			'What is photosynthesis?',
-			'How do I make a paper airplane?',
-			'Why do leaves change color in the fall?',
-			'What is the difference between weather and climate?',
-			'How many legs does a spider have?',
-			'Why do onions make you cry?',
-			'What is gravity?',
-			'How do bees make honey?',
-			'What is a good way to start learning to cook?'
+			'How do batteries work?',
+			'What is the theory of evolution?',
+			'How does GPS work?',
+			'What is inflation?',
+			'Explain how a car engine works.'
+		]
+	},
+	{
+		id: 'your-taste',
+		label: 'Your taste',
+		reward: 'human',
+		prompts: [
+			'Name a coffee shop.',
+			'Write a one-line poem about rain.',
+			'Describe a cat in a few words.',
+			'Invent a new ice cream flavor.',
+			'Give me a motto for Mondays.',
+			'Name a pirate ship.',
+			'Write a one-line poem about the moon.',
+			'Describe the ocean in a few words.',
+			'Invent a holiday.',
+			'Name a band.',
+			'Write a fortune cookie message.',
+			'Describe autumn in a few words.',
+			'Invent a new sport.',
+			'Name a dragon.',
+			'Write a one-line poem about coffee.',
+			'Describe a city at night in a few words.',
+			'Invent a board game.',
+			'Name a spaceship.',
+			'Write a toast for a friend.',
+			'Describe snow in a few words.'
 		]
 	}
 ];
 
-export const DEFAULT_TASK = TASKS.find((t) => t.id === 'yes-no')!;
-export const DEFAULT_PROMPTS = DEFAULT_TASK.prompts;
-export const DEFAULT_CONSTITUTION = DEFAULT_TASK.constitution;
+export const DEFAULT_PRESET = PRESETS[0];
 
-/** The gist of a judge prompt in one line: its preset's name, or its first line. */
-export function judgeSummary(constitution: string): string {
-	return TASKS.find((t) => t.constitution === constitution.trim())?.label ?? constitution.trim().split('\n')[0];
+type RewardConfig = { reward: RewardKind; constitution: string; rewardCode: string; prompts: string[] };
+
+/** A config's preset, if its reward and prompts still match one. */
+export function presetOf(c: RewardConfig): Preset | undefined {
+	return PRESETS.find(
+		(p) =>
+			p.reward === c.reward &&
+			(p.reward !== 'ai' || p.constitution === c.constitution) &&
+			(p.reward !== 'code' || p.code === c.rewardCode) &&
+			c.prompts.every((q) => p.prompts.includes(q))
+	);
+}
+
+/** One line describing a reward, kept with saved models. */
+export function rewardSummary(c: RewardConfig): string {
+	const preset = presetOf(c);
+	if (c.reward === 'human') return 'human feedback';
+	if (c.reward === 'code') return `code: ${preset?.label ?? c.rewardCode.trim().split('\n')[0]}`;
+	return `AI judge: ${preset?.label ?? c.constitution.trim().split('\n')[0]}`;
 }
