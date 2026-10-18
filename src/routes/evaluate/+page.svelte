@@ -2,7 +2,6 @@
 	import { onMount, tick } from 'svelte';
 
 	import { getModel, MODELS, type ChatTurn } from '$lib/models/registry';
-	import { judgeSummary } from '$lib/presets';
 	import type { SavedMeta } from '$lib/saved';
 	import { config } from '$lib/state/config.svelte';
 	import { runtime } from '$lib/state/runtime.svelte';
@@ -21,7 +20,7 @@
 	const hasSession = $derived(runtime.ready && runtime.passes.length > 0);
 	// Every model you can chat with: the originals, the live session, and saved ones.
 	const options = $derived<Option[]>([
-		...MODELS.filter((m) => m.id === 'smollm2-135m').map((m) => ({
+		...MODELS.filter((m) => m.trainable).map((m) => ({
 			value: `original:${m.id}`,
 			label: `${m.label} (original)`,
 			name: 'original',
@@ -145,7 +144,7 @@
 				<div class="min-w-0">
 					<div class="truncate font-terminal text-[0.8rem]">{m.name}</div>
 					{#if m.constitution}
-						<div class="truncate text-[0.7rem] text-ink-soft" title={m.constitution}>judge: “{judgeSummary(m.constitution)}”</div>
+						<div class="truncate text-[0.7rem] text-ink-soft" title={m.constitution}>{m.constitution.trim().split('\n')[0]}</div>
 					{/if}
 					<div class="text-[0.7rem] text-ink-soft tabular-nums">
 						{getModel(m.baseId).params} · {m.passes} passes ·

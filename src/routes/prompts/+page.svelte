@@ -6,30 +6,14 @@
 	import CheckIcon from '@lucide/svelte/icons/check';
 	import FileInputIcon from '@lucide/svelte/icons/file-input';
 
-	import { TASKS, type Task } from '$lib/presets';
-	import { config } from '$lib/state/config.svelte';
+	import { config, judgeModeOf } from '$lib/state/config.svelte';
 	import { runtime } from '$lib/state/runtime.svelte';
-
-	const PRESET_PROMPTS = 5;
 
 	let importing = $state(false);
 	let importText = $state('');
 	let importError = $state('');
 	let copied = $state(false);
 	let list: HTMLOListElement;
-
-	const same = (a: string[], b: string[]) => a.length === b.length && a.every((x, i) => x === b[i]);
-	const activeTask = $derived(
-		TASKS.find(
-			(t) => config.constitution === t.constitution && same(config.prompts, t.prompts.slice(0, PRESET_PROMPTS))
-		)
-	);
-
-	function loadTask(t: Task) {
-		config.prompts = t.prompts.slice(0, PRESET_PROMPTS);
-		config.constitution = t.constitution;
-		config.rule = t.rule ?? null;
-	}
 
 	async function copyJson() {
 		await navigator.clipboard.writeText(JSON.stringify(config.prompts.filter((p) => p.trim()), null, 2));
@@ -86,35 +70,13 @@
 	}
 </script>
 
-<div class="space-y-8">
-	<div class="space-y-4">
-		<p class="max-w-2xl text-xs leading-relaxed text-gray-400">
-			To fine-tune, we'll ask the base model all of the prompts on the left. Based on how it answers (as evaluated by
-			the judge prompt on the right), we'll update its weights.
-		</p>
-		<label class="flex items-center gap-3 text-xs text-gray-400">
-			preset
-			<select
-				class="field w-64"
-				value={activeTask?.id ?? 'custom'}
-				onchange={(e) => {
-					const id = e.currentTarget.value;
-					const task = TASKS.find((t) => t.id === id);
-					if (task) loadTask(task);
-					else {
-						config.prompts = [''];
-						config.constitution = '';
-						config.rule = null;
-					}
-				}}
-			>
-				<option value="custom">custom</option>
-				{#each TASKS as task (task.id)}<option value={task.id}>{task.label.toLowerCase()}</option>{/each}
-			</select>
-		</label>
-	</div>
+<div class="max-w-3xl space-y-8">
+	<p class="max-w-2xl text-xs leading-relaxed text-gray-400">
+		Each pass asks the model one of these prompts. How its answers score (with the reward you picked) decides how its
+		weights change. Prompts the training never sees are a good test of whether a behavior generalizes.
+	</p>
 
-	<div class="grid gap-6 lg:grid-cols-2">
+	<div class="max-w-3xl">
 		<section class="space-y-2">
 			<div class="flex h-6 items-center justify-between">
 				<h2 class="label">prompts</h2>
@@ -177,17 +139,6 @@
 			</button>
 		</section>
 
-		<section class="space-y-2">
-			<div class="flex h-6 items-center">
-				<h2 class="label">judge prompt</h2>
-			</div>
-			<textarea
-				class="field min-h-[16rem] resize-y p-3 leading-relaxed"
-				bind:value={config.constitution}
-				spellcheck="true"
-				placeholder="What should the judge prefer? e.g. Reward answers that are short and friendly."
-			></textarea>
-		</section>
 	</div>
 
 	<details class="group card p-3">
@@ -215,7 +166,18 @@
 			{@render num('answers per pass', 'group size', config.groupSize, (v) => (config.groupSize = Math.round(v)), 2, 8, 1)}
 			{@render num('max tokens', 'per answer', config.maxNew, (v) => (config.maxNew = Math.round(v)), 16, 256, 16)}
 			{@render num('temperature', 'higher = more varied', config.temperature, (v) => (config.temperature = v), 0.1, 1.5, 0.1)}
-			{@render num('judge matches', `per answer, of ${config.groupSize - 1}`, config.matchesPerAnswer, (v) => (config.matchesPerAnswer = Math.round(v)), 1, 7, 1)}
+			{#if config.reward === 'ai' && config.algorithm !== 'dpo'}
+				<label class="space-y-1 text-xs text-gray-400">
+					<span>judge</span>
+					<select class="field" bind:value={config.judgeMode}>
+						<option value="pointwise">scores each answer (yes / no)</option>
+						<option value="pairwise">compares answers in pairs (A / B)</option>
+					</select>
+				</label>
+			{/if}
+			{#if config.reward === 'ai' && judgeModeOf(config) === 'pairwise'}
+				{@render num('judge matches', `per answer, of ${config.groupSize - 1}`, config.matchesPerAnswer, (v) => (config.matchesPerAnswer = Math.round(v)), 1, 7, 1)}
+			{/if}
 			{#if config.mode === 'lora'}
 				{@render num('learning rate', 'LoRA', config.loraLearningRate, (v) => (config.loraLearningRate = v), 1e-6, 1e-2, 1e-5)}
 				{@render num('LoRA rank', 'adapter size', config.loraRank, (v) => (config.loraRank = Math.round(v)), 1, 64, 1)}
@@ -231,10 +193,12 @@
 			{:else}
 				{@render num('KL penalty β', '0 turns it off', config.klBeta, (v) => (config.klBeta = v), 0, 1, 0.01)}
 			{/if}
-			<label class="flex items-center gap-2 self-end pb-1.5 text-xs text-gray-400">
-				<input type="checkbox" bind:checked={config.bothOrders} />
-				judge both orders <span class="text-gray-600">(2× judge time)</span>
-			</label>
+			{#if config.reward === 'ai' && judgeModeOf(config) === 'pairwise'}
+				<label class="flex items-center gap-2 self-end pb-1.5 text-xs text-gray-400">
+					<input type="checkbox" bind:checked={config.bothOrders} />
+					judge both orders <span class="text-gray-600">(2× judge time)</span>
+				</label>
+			{/if}
 			<label class="space-y-1 text-xs text-gray-400">
 				<span>prompt order</span>
 				<select class="field" bind:value={config.promptOrder}>
@@ -246,7 +210,7 @@
 	</details>
 
 	<div class="flex items-center justify-between">
-		<a href="/" class="text-[0.85rem] text-ink-soft hover:text-ink">← back</a>
+		<a href="/reward" class="text-[0.85rem] text-ink-soft hover:text-ink">← back</a>
 		<button type="button" class="btn-primary" onclick={start} disabled={runtime.gpu === 'missing'}>
 			train →
 		</button>

@@ -11,24 +11,43 @@ export type Verdict = { score: number };
 const JUDGE_BUCKET = 64;
 
 /*
- * The judge never writes text. It sees the guidelines, the question and two
- * answers, is asked "which follows the guidelines better? A or B", and we read
- * its next-token logits for "A" and "B": P(A) = sigmoid(logit A − logit B).
+ * The judge never writes text. We read its next-token logits for a fixed pair
+ * of tokens, in one of two modes:
  *
- * Pairwise judging is sharper than scoring one answer at a time (92% vs a 0.68
- * AUC on our test sets with Qwen2.5 1.5B). Small judges lean toward whichever
- * answer comes first: ask each pair in a random order (bias cancels on
- * average) or, more expensively, in both orders and average.
- * The instructions, guidelines and question are the same for every pair, so
- * they're prefilled once and each comparison only pays for its two answers.
+ * - Pointwise: it sees one answer and is asked "does it follow the
+ *   guidelines? Yes or No": score = P(Yes) = sigmoid(logit Yes − logit No).
+ * - Pairwise: it sees two answers and is asked "which follows the guidelines
+ *   better? A or B": P(A) = sigmoid(logit A − logit B).
+ *
+ * Which is sharper depends on the judge. Picking the rule-passing answer of a
+ * pair where only one passes, Qwen3 1.7B scored 70–100% pointwise against
+ * 52–90% pairwise; Qwen2.5 1.5B was the other way around. Pointwise also costs
+ * one row per answer rather than two per pair. Small judges lean hard toward
+ * one position (Qwen3 picked the second answer ~70% of the time), so pairs are
+ * asked in a random order (bias cancels on average) or, better, in both.
+ * The instructions, guidelines and question are the same for every answer, so
+ * they're prefilled once and each row only pays for its answer(s).
  */
 
-export const COMPARE_SYSTEM = 'You compare AI answers against guidelines.';
+export type JudgeMode = 'pointwise' | 'pairwise';
 
-function comparePrefix(constitution: string, question: string): string {
+const SYSTEM: Record<JudgeMode, string> = {
+	pointwise: 'You check AI answers against guidelines.',
+	pairwise: 'You compare AI answers against guidelines.'
+};
+
+function judgePrompt(mode: JudgeMode, constitution: string, question: string): string {
 	return (
-		`<|im_start|>system\n${COMPARE_SYSTEM}<|im_end|>\n<|im_start|>user\n` +
+		`<|im_start|>system\n${SYSTEM[mode]}<|im_end|>\n<|im_start|>user\n` +
 		`GUIDELINES:\n${constitution.trim()}\n\nQUESTION:\n${question.trim()}\n\n`
+	);
+}
+
+function checkSuffix(answer: string, assistantPrefix: string): string {
+	return (
+		`ANSWER:\n${answer.trim() || '(empty)'}\n\n` +
+		'Does the ANSWER follow the GUIDELINES? Reply with only Yes or No.<|im_end|>\n<|im_start|>assistant\n' +
+		assistantPrefix
 	);
 }
 
@@ -75,8 +94,11 @@ export function schedulePairs(n: number, perAnswer: number): [number, number][] 
 	return out;
 }
 
-/** All of a pass's comparisons (6 pairs + 4 vs original) fit in one batch. */
-const COMPARE_BATCH = 16;
+/**
+ * Rows per judge call. Peak GPU memory grows ~1 GB per row with Qwen3 1.7B
+ * (16 rows peaked at ~22 GB and swapped on a 16 GB Mac, 8x slower than 4).
+ */
+const COMPARE_BATCH = 4;
 const SUFFIX_BUCKET = 32;
 
 /** The judge's shared prompt (instructions, guidelines, question), prefilled once. */
@@ -87,10 +109,11 @@ export async function judgePrefix(
 	weights: Weights,
 	tok: Tokenizer,
 	padToken: number,
+	mode: JudgeMode,
 	constitution: string,
 	question: string
 ): Promise<JudgePrefix> {
-	const ids = tok.encode(comparePrefix(constitution, question));
+	const ids = tok.encode(judgePrompt(mode, constitution, question));
 	const P = bucket(ids.length, JUDGE_BUCKET);
 	const { row, pad } = leftPad(ids, P, padToken);
 	const [logits, caches] = model.prefill(
@@ -104,6 +127,64 @@ export async function judgePrefix(
 	const kv = caches as KV[]; // judges are attention-only
 	await Promise.all(kv.map(({ k, v }) => Promise.all([k.blockUntilReady(), v.blockUntilReady()])));
 	return { kv, pad };
+}
+
+/** Logits of the two `pick` tokens after each row continues the prefix: [rows, 2]. */
+async function pickLogits(
+	model: CompiledModel,
+	weights: Weights,
+	prefix: JudgePrefix,
+	rows: number[][],
+	padToken: number,
+	pick: [number, number]
+): Promise<Float32Array> {
+	const S = bucket(Math.max(...rows.map((r) => r.length)), SUFFIX_BUCKET);
+	const padded = rows.map((r) => leftPad(r, S, padToken));
+	const logits = model.extend(
+		tree.ref(weights),
+		tree.ref(prefix.kv),
+		np.array(prefix.pad, { dtype: np.int32 }),
+		np.array(new Int32Array(padded.flatMap((r) => r.row)), { shape: [rows.length, S], dtype: np.int32 }),
+		np.array(new Int32Array(padded.map((r) => r.pad)), { dtype: np.int32 }),
+		np.array(new Int32Array(pick), { dtype: np.int32 })
+	);
+	return (await logits.data()) as Float32Array;
+}
+
+/**
+ * Pointwise: each answer's log-odds that it follows the guidelines,
+ * logit(Yes) − logit(No). P(Yes) is sigmoid of that.
+ */
+export async function scoreAnswers(
+	model: CompiledModel,
+	weights: Weights,
+	tok: Tokenizer,
+	padToken: number,
+	constitution: string,
+	question: string,
+	answers: string[],
+	opts: {
+		assistantPrefix?: string;
+		/** Called as each batch of answers is scored, with all log-odds so far. */
+		onScores?: (logOdds: number[]) => void;
+		/** A cached prefix for this question (kept by the caller), else one is built and freed. */
+		prefix?: JudgePrefix;
+	}
+): Promise<number[]> {
+	const pick: [number, number] = [tok.encode('Yes')[0], tok.encode('No')[0]];
+	const prefix = opts.prefix ?? (await judgePrefix(model, weights, tok, padToken, 'pointwise', constitution, question));
+	const rows = answers.map((a) => tok.encode(checkSuffix(a, opts.assistantPrefix ?? '')));
+	const logOdds: number[] = [];
+	try {
+		for (let start = 0; start < rows.length; start += COMPARE_BATCH) {
+			const data = await pickLogits(model, weights, prefix, rows.slice(start, start + COMPARE_BATCH), padToken, pick);
+			for (let b = 0; 2 * b < data.length; b++) logOdds.push(data[2 * b] - data[2 * b + 1]);
+			opts.onScores?.(logOdds);
+		}
+	} finally {
+		if (!opts.prefix) tree.dispose(prefix.kv);
+	}
+	return logOdds;
 }
 
 export async function compareAnswers(
@@ -127,7 +208,7 @@ export async function compareAnswers(
 	const [aId, bId] = [tok.encode('A')[0], tok.encode('B')[0]];
 	const owned = !opts.prefix;
 	const { kv: prefix, pad: prefixPad } =
-		opts.prefix ?? (await judgePrefix(model, weights, tok, padToken, constitution, question));
+		opts.prefix ?? (await judgePrefix(model, weights, tok, padToken, 'pairwise', constitution, question));
 
 	// Either two rows per pair, (a, b) and (b, a), or one row in a random order.
 	// A random order cancels the judge's position bias on average at half the cost.
@@ -147,17 +228,7 @@ export async function compareAnswers(
 	try {
 		for (let start = 0; start < rows.length; start += COMPARE_BATCH) {
 			const chunk = rows.slice(start, start + COMPARE_BATCH);
-			const S = bucket(Math.max(...chunk.map((r) => r.length)), SUFFIX_BUCKET);
-			const padded = chunk.map((r) => leftPad(r, S, padToken));
-			const logits = model.extend(
-				tree.ref(weights),
-				tree.ref(prefix),
-				np.array(prefixPad, { dtype: np.int32 }),
-				np.array(new Int32Array(padded.flatMap((r) => r.row)), { shape: [chunk.length, S], dtype: np.int32 }),
-				np.array(new Int32Array(padded.map((r) => r.pad)), { dtype: np.int32 }),
-				np.array(new Int32Array([aId, bId]), { dtype: np.int32 })
-			);
-			const data = (await logits.data()) as Float32Array; // [rows, 2]: logit(A), logit(B)
+			const data = await pickLogits(model, weights, { kv: prefix, pad: prefixPad }, chunk, padToken, [aId, bId]); // logit(A), logit(B)
 			for (let b = 0; b < chunk.length; b++) pA.push(1 / (1 + Math.exp(data[2 * b + 1] - data[2 * b])));
 			// Emit every pair whose orderings are all done.
 			while (matches.length < pairs.length && rowsBefore[matches.length] + orders[matches.length].length <= pA.length) {

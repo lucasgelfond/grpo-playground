@@ -6,8 +6,7 @@
 	import PassGraph from '$lib/components/PassGraph.svelte';
 	import { formatBytes, getModel } from '$lib/models/registry';
 	import { config } from '$lib/state/config.svelte';
-	import { TASKS } from '$lib/presets';
-	import { CHECKS } from '$lib/rl/rules';
+	import { compileReward } from '$lib/rl/rewards';
 	import { runtime, type Pass } from '$lib/state/runtime.svelte';
 
 	let gridView = $state<'total' | 'pass'>('total');
@@ -87,11 +86,16 @@
 			format: (v) => v.toFixed(2)
 		}
 	});
-	/** The answer check matching the selected preset's goal, if any. */
-	const presetCheck = $derived(TASKS.find((t) => t.constitution === config.constitution)?.rule);
-	/** Share of a pass's answers passing a heuristic check. */
-	const share = (p: Pass, test: (t: string, f: boolean) => boolean) =>
-		p.answers.filter((a) => test(a.text, a.stopped)).length / p.answers.length;
+	/** The preset's check (code like a reward's), compiled; null if there's none or it doesn't run. */
+	const check = $derived.by(() => {
+		if (!config.check) return null;
+		try {
+			const test = compileReward(config.check.code);
+			return { label: config.check.label, test: (p: Pass) => p.answers.filter((a) => test(a.text, p.prompt) >= 0.5).length / p.answers.length };
+		} catch {
+			return null;
+		}
+	});
 	const answerCharts = $derived<Record<string, { label: string } & ChartSpec>>({
 		win: {
 			label: 'Win rate',
@@ -115,19 +119,21 @@
 			format: (v) => v.toFixed(0)
 		},
 		// A check only makes sense against a preset's goal: show just that preset's one.
-		...Object.fromEntries(
-			CHECKS.filter((h) => h.id === presetCheck).map((h) => [
-				h.id,
-				{
-					label: h.label,
-					series: [{ label: `share of answers: ${h.label.toLowerCase()}`, values: done.map((p) => share(p, h.test)), color: 'var(--color-accent)', dots: true }],
-					yMin: 0,
-					yMax: 1,
-					format: pctFmt
+		...(check
+			? {
+					check: {
+						label: check.label,
+						series: [{ label: `share of answers: ${check.label.toLowerCase()}`, values: done.map(check.test), color: 'var(--color-accent)', dots: true }],
+						yMin: 0,
+						yMax: 1,
+						format: pctFmt
+					}
 				}
-			])
-		)
+			: {})
 	});
+
+	/** Human feedback: the latest pass is waiting for a pick, and it's the one on screen. */
+	const picking = $derived(!!pass?.awaitingChoice && pass === runtime.passes.at(-1));
 
 	function selectPass(i: number | null) {
 		runtime.viewing = i;
@@ -199,22 +205,33 @@
 
 	</div>
 	{#if runtime.error}<p class="-mt-3 text-[0.8rem] text-danger">{runtime.error}</p>{/if}
+	{#if picking}
+		<div class="-mt-2 flex items-center gap-3 text-[0.85rem]">
+			<span>Pick the answer you like best.</span>
+			<button type="button" class="btn" onclick={() => runtime.choose(null)}>none are good, skip</button>
+		</div>
+	{/if}
 	<!-- The pass, as a graph: full bleed, breaking out of the page column -->
 	<section class="relative left-1/2 w-screen -translate-x-1/2 border-y border-gray-800/60 bg-gray-950 px-8 py-3 sm:px-16">
 		<PassGraph
 			{pass}
 			groupSize={config.groupSize}
 			maxNew={config.maxNew}
-			judgeLabel={getModel(config.judgeId).label}
+			judgeLabel={config.reward === 'ai' ? getModel(config.judgeId).label : config.reward === 'code' ? 'your code' : 'you'}
 			totalChange={sumNorms(pass?.layerNorms)}
 			{tokenScale}
 			modelLabel={getModel(config.policyId).label}
 			method={config.mode === 'lora' ? 'LoRA' : 'Whole model'}
 			name={runtime.sessionName || '…'}
 			createdAt={runtime.sessionCreatedAt}
-			judgeSummary={config.constitution.trim().split('\n')[0]}
+			judgeSummary={config.reward === 'ai'
+				? config.constitution.trim().split('\n')[0]
+				: config.reward === 'code'
+					? (config.check?.label ?? config.rewardCode.trim().split('\n').at(-1) ?? '')
+					: 'pick the best answer'}
 			algorithm={config.algorithm}
 			onrename={(n) => runtime.renameSession(n)}
+			onpick={picking ? (i) => runtime.choose(i) : undefined}
 		/>
 	</section>
 

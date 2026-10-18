@@ -1,5 +1,6 @@
-import { DEFAULT_TASK } from '$lib/presets';
-import type { RuleId } from '$lib/rl/rules';
+import { DEFAULT_PRESET, PRESETS, type Preset } from '$lib/presets';
+import type { JudgeMode } from '$lib/rl/judge';
+import type { RewardKind } from '$lib/rl/rewards';
 import type { Mode } from '$lib/rl/trainer';
 
 /**
@@ -12,10 +13,17 @@ export type Config = {
 	mode: Mode;
 	prompts: string[];
 	promptOrder: 'sequential' | 'shuffle';
+	/** Where rewards come from: an AI judge, reward code, or you. */
+	reward: RewardKind;
+	/** AI: what the judge rewards. */
 	constitution: string;
-	/** Rule check for the loaded task preset, if it has one. */
-	rule: RuleId | null;
-	/** How many head-to-head matches each answer plays per pass. */
+	/** Code: the body of `function (answer, prompt)`, returning a number or true / false. */
+	rewardCode: string;
+	/** Charted on the train page (from the preset): the share of answers this code calls true. */
+	check: Preset['check'] | null;
+	/** Score each answer on its own (yes/no), or compare answers in pairs (A/B). */
+	judgeMode: JudgeMode;
+	/** Pairwise: how many head-to-head matches each answer plays per pass. */
 	matchesPerAnswer: number;
 	/** Ask every pair in both A/B orders (2× judge cost) instead of one random order. */
 	bothOrders: boolean;
@@ -39,25 +47,32 @@ export type Config = {
 	dpoMinConfidence: number;
 };
 
+// SmolLM2 360M, not LFM2 350M: LFM2 rambles past any short token limit
+// (under 13% of its answers finish in 128 tokens), so nearly every answer
+// was cut off and the judge had nothing to prefer.
 export const DEFAULT_CONFIG: Config = {
-	policyId: 'lfm2-350m',
+	policyId: 'smollm2-360m',
 	judgeId: 'qwen3-1.7b',
 	mode: 'lora',
-	prompts: DEFAULT_TASK.prompts.slice(0, 5),
+	prompts: DEFAULT_PRESET.prompts.slice(0, 5),
 	promptOrder: 'shuffle',
-	constitution: DEFAULT_TASK.constitution,
-	rule: DEFAULT_TASK.rule ?? null,
-	// Every pair, asked in both A/B orders: the judge's lean toward whichever
-	// answer comes first cancels instead of adding noise to the reward.
+	reward: DEFAULT_PRESET.reward,
+	constitution: DEFAULT_PRESET.constitution ?? '',
+	rewardCode: PRESETS.find((p) => p.reward === 'code')!.code!,
+	check: DEFAULT_PRESET.check ?? null,
+	// Qwen3 1.7B is more accurate scoring one answer at a time, and it's a
+	// fifth of the judge rows (6 instead of 30).
+	judgeMode: 'pointwise',
+	// Pairwise: every pair, asked in both A/B orders, so the judge's lean toward
+	// one position cancels instead of adding noise to the reward.
 	matchesPerAnswer: 4,
 	bothOrders: true,
-	// 5 answers: 10 pairs among them plus 5 against the original model.
 	groupSize: 5,
-	maxNew: 128,
-	// Warm, not hot: enough variety within each group for GRPO to have something
-	// to prefer, without the 135M model's incoherent samples at 1.0.
-	temperature: 0.7,
-	loraLearningRate: 3e-4,
+	// Short answers finish, so the judge sees whole answers, and passes are fast.
+	maxNew: 64,
+	temperature: 1.0,
+	// High for LoRA, so the behavior changes within a demo's 10-30 passes.
+	loraLearningRate: 1e-3,
 	fullLearningRate: 1e-5,
 	loraRank: 16,
 	loraAlpha: 32,
@@ -68,9 +83,9 @@ export const DEFAULT_CONFIG: Config = {
 	dpoMinConfidence: 0.1
 };
 
-// v5: everyone restarts on the current defaults (LFM2 350M judged by Qwen3
-// 1.7B, both-order judging, 5 answers at temperature 0.7).
-const KEY = 'grpo-playground:config:v5';
+// v7: everyone restarts on the current defaults (SmolLM2 360M, an AI judge
+// rewarding answers without filler, 64 tokens at temperature 1.0, LoRA at 1e-3).
+const KEY = 'grpo-playground:config:v7';
 
 function load(): Config {
 	try {
@@ -94,6 +109,21 @@ $effect.root(() => {
 		}
 	});
 });
+
+/** Load a preset: its reward and (the first five of) its prompts. */
+export function applyPreset(c: Config, p: Preset) {
+	c.reward = p.reward;
+	c.prompts = p.prompts.slice(0, 5);
+	if (p.constitution !== undefined) c.constitution = p.constitution;
+	if (p.code !== undefined) c.rewardCode = p.code;
+	// Code rewards chart their own pass rate.
+	c.check = p.check ?? (p.code ? { label: p.label, code: p.code } : null);
+}
+
+/** DPO trains on preferences between answers, so it always judges in pairs. */
+export function judgeModeOf(c: Config): JudgeMode {
+	return c.algorithm === 'dpo' ? 'pairwise' : c.judgeMode;
+}
 
 export function learningRate(c: Config): number {
 	return c.mode === 'lora' ? c.loraLearningRate : c.fullLearningRate;

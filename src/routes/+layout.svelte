@@ -10,7 +10,8 @@
 
 	const STEPS = [
 		{ href: '/', label: 'models' },
-		{ href: '/prompts', label: 'prompts & judge' },
+		{ href: '/reward', label: 'reward' },
+		{ href: '/prompts', label: 'prompts' },
 		{ href: '/train', label: 'train' },
 		{ href: '/evaluate', label: 'evaluate' }
 	];
