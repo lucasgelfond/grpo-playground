@@ -30,6 +30,8 @@
 		const total = runtime.loads.reduce((s, l) => s + l.total, 0);
 		return total ? Math.round((100 * runtime.loads.reduce((s, l) => s + l.loaded, 0)) / total) : 0;
 	});
+	// Only the AI-feedback reward loads a second (judge) model.
+	const models = $derived(config.reward === 'ai' ? 'models' : 'model');
 </script>
 
 <svelte:head>
@@ -61,8 +63,8 @@
 					</a>
 				{/each}
 				<span class="ml-auto text-gray-500 tabular-nums">
-					{#if runtime.loading}loading models · {loadedPct}%
-					{:else if runtime.ready}<span class="text-up">●</span> models ready{/if}
+					{#if runtime.loading}loading {models} · {loadedPct}%
+					{:else if runtime.ready}<span class="text-up">●</span> {models} ready{/if}
 				</span>
 			</nav>
 		</header>

@@ -139,6 +139,8 @@
 		runtime.viewing = i;
 	}
 
+	// Only the AI-feedback reward loads a second (judge) model.
+	const models = $derived(config.reward === 'ai' ? 'models' : 'model');
 </script>
 
 <div class="space-y-5">
@@ -146,7 +148,7 @@
 	{#if runtime.loads.length || runtime.loading}
 		<details class="text-xs text-gray-500" open={runtime.loading}>
 			<summary class="cursor-pointer select-none hover:text-gray-300">
-				{runtime.loading ? runtime.status || 'loading models…' : 'models loaded'}
+				{runtime.loading ? runtime.status || `loading ${models}…` : `${models} loaded`}
 			</summary>
 			<ul class="mt-2 space-y-1.5 pl-4">
 				{#each runtime.loads as load (load.label)}
