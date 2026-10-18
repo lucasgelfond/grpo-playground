@@ -4,12 +4,11 @@ import type { PassUpdate } from '$lib/engine/engine.worker';
 import { getModel, type ChatTurn, type ModelDef } from '$lib/models/registry';
 import { persistStorage } from '$lib/models/weights';
 import type { Match, Verdict } from '$lib/rl/judge';
-import type { DpoMargin } from '$lib/rl/trainer';
 import { createProject, deleteProjectOfModel, listPolicyModels, recordPass, renameModel } from '$lib/db';
 import { deleteSaved, loadSavedWeights, newModelId, type SavedMeta } from '$lib/saved';
 import { petname } from '$lib/petname';
 import { rewardSummary } from '$lib/presets';
-import { config, judgeModeOf, learningRate, type Config } from './config.svelte';
+import { config, learningRate, type Config } from './config.svelte';
 
 export type Phase = 'prefill' | 'sampling' | 'judging' | 'updating' | 'done';
 
@@ -50,9 +49,6 @@ export type Pass = {
 	matchesTotal?: number;
 	/** Human feedback: sampled, and waiting for a pick on the train page. */
 	awaitingChoice?: boolean;
-	// DPO works but isn't exposed in the UI (mostly because GRPO playground was a better name, LOL). if you do ?mode=dpo or go to dpo.lucasgelfond.online you can try the DPO version
-	/** The preference pairs trained on, with margins before and after. */
-	dpo?: DpoMargin[];
 	/** [layer][target] ||ΔW|| from the original weights, after this pass. */
 	layerNorms?: number[][];
 };
@@ -76,8 +72,7 @@ function trainingKey(c: Config): string {
 		c.prompts.map((p) => p.trim()).filter(Boolean),
 		c.reward,
 		c.reward === 'ai' ? c.constitution.trim() : null,
-		c.reward === 'code' ? c.rewardCode.trim() : null,
-		c.algorithm
+		c.reward === 'code' ? c.rewardCode.trim() : null
 	]);
 }
 
@@ -216,7 +211,7 @@ class Runtime {
 				mode: config.mode,
 				settings: {
 					groupSize: config.groupSize,
-					judgeMode: judgeModeOf(config),
+					judgeMode: config.judgeMode,
 					matchesPerAnswer: config.matchesPerAnswer,
 					bothOrders: config.bothOrders,
 					maxNew: config.maxNew,
@@ -339,7 +334,7 @@ class Runtime {
 		if (!warmOnly) await this.load();
 		if (!this.ready || this.running) return;
 		const prompts = config.prompts.map((p) => p.trim()).filter(Boolean);
-		const judgeMode = config.reward === 'ai' ? judgeModeOf(config) : null;
+		const judgeMode = config.reward === 'ai' ? config.judgeMode : null;
 		const input = { prompts, constitution: config.constitution, judgeMode, maxNew: config.maxNew };
 		await this.#exclusive(() => engine('warm', input)).catch((e) => console.warn('Warm-up failed', e));
 	}

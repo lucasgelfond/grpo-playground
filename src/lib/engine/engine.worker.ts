@@ -26,7 +26,7 @@ import {
 import { compileReward } from '$lib/rl/rewards';
 import { PolicyTrainer } from '$lib/rl/trainer';
 import { loadSavedWeights, saveModel, type SavedMeta } from '$lib/saved';
-import { judgeModeOf, type Config } from '$lib/state/config.svelte';
+import type { Config } from '$lib/state/config.svelte';
 import type { Answer, LoadItem, Pass } from '$lib/state/runtime.svelte';
 
 type ChatSide = { weights: Weights; lora: Lora | null };
@@ -58,15 +58,6 @@ function throttled(post: () => void): () => void {
 			post();
 		}, 33);
 	};
-}
-
-/**
- * DPO's preferences between trained answers: the judge's own pairs if it
- * compared answers, else every pair the scores tell apart.
- */
-function preferencePairs(scores: number[], matches: Match[]): Match[] {
-	if (matches.some((m) => m.a < scores.length && m.b < scores.length)) return matches;
-	return scores.flatMap((si, i) => scores.flatMap((sj, j) => (j > i && si !== sj ? [{ a: i, b: j, p: si > sj ? 1 : 0 }] : [])));
 }
 
 /** A sampled pass and what's needed to train on it once it's scored. */
@@ -264,7 +255,7 @@ export class Engine {
 		// its own prompt for this question (cached after the first time). Then
 		// the answers sample in parallel, alongside the original model's answers.
 		status(`Pass ${index + 1}: prefilling`);
-		const judgeMode = judgeModeOf(config);
+		const judgeMode = config.judgeMode;
 		const judgeReady = config.reward === 'ai' ? this.#prefixFor(judgeMode, config.constitution, prompt) : null;
 		const referenceReady = this.#referenceFor(prompt, promptIds, config.maxNew);
 		const { weights, lora } = trainer.policy();
@@ -331,7 +322,7 @@ export class Engine {
 		const vsRef = matches.filter((m) => m.b === G);
 		pass.vsOriginal = vsRef.reduce((s, m) => s + m.p, 0) / Math.max(1, vsRef.length);
 		reference.verdict = { score: rates[G] };
-		return this.#update(scored, rates.slice(0, G), matches, progress);
+		return this.#update(scored, rates.slice(0, G), progress);
 	}
 
 	/** Human feedback: train on your pick (an answer's index), or skip the pass (null). */
@@ -341,16 +332,14 @@ export class Engine {
 		this.#awaiting = null;
 		scored.pass.awaitingChoice = false;
 		const scores = scored.pass.answers.map((_, i) => (i === input.best ? 1 : 0));
-		// "Picked over" pairs, for DPO.
-		const matches = input.best === null ? [] : scores.flatMap((_, i) => (i === input.best ? [] : [{ a: input.best!, b: i, p: 1 }]));
-		return this.#update(scored, scores, matches, progress);
+		return this.#update(scored, scores, progress);
 	}
 
 	/** Pass state between scoring and the update (held across a human's pick). */
 	#awaiting: Scored | null = null;
 
-	/** One GRPO (or DPO) step on scored answers, then autosave. */
-	async #update(scored: Scored, scores: number[], matches: Match[], progress: (u: PassUpdate) => void): Promise<Pass> {
+	/** One GRPO step on scored answers, then autosave. */
+	async #update(scored: Scored, scores: number[], progress: (u: PassUpdate) => void): Promise<Pass> {
 		const trainer = this.#trainer!;
 		const def = this.#policyDef!;
 		const { input, pass, promptIds, completions } = scored;
@@ -364,10 +353,7 @@ export class Engine {
 		pass.phase = 'updating';
 		sync();
 		status(`Pass ${index + 1}: updating weights`);
-		const res =
-			config.algorithm === 'dpo'
-				? await this.#dpoUpdate(promptIds, completions, preferencePairs(scores, matches), config, pass)
-				: await trainer.update(promptIds, completions, scores, def.padToken, config.klBeta);
+		const res = await trainer.update(promptIds, completions, scores, def.padToken, config.klBeta);
 		res.advantages.forEach((adv, i) => {
 			const a = pass.answers[i];
 			a.advantage = adv;
@@ -477,25 +463,6 @@ export class Engine {
 			}
 		);
 		return view(logOdds);
-	}
-
-	// DPO works but isn't exposed in the UI (mostly because GRPO playground was a better name, LOL). if you do ?mode=dpo or go to dpo.lucasgelfond.online you can try the DPO version
-	/**
-	 * Train on the judge's most confident pairs among the
-	 * trained answers (never the original model's), as soft preferences.
-	 * Advantages here are just each answer's net wins, for the ↑ / ↓ display.
-	 */
-	async #dpoUpdate(promptIds: number[], completions: number[][], matches: Match[], config: Config, pass: Pass) {
-		const G = completions.length;
-		const pairs = matches
-			.filter((m) => m.a < G && m.b < G && Math.abs(m.p - 0.5) >= config.dpoMinConfidence)
-			.sort((x, y) => Math.abs(y.p - 0.5) - Math.abs(x.p - 0.5))
-			.slice(0, config.dpoPairs)
-			.map((m) => (m.p >= 0.5 ? { chosen: m.a, rejected: m.b, p: m.p } : { chosen: m.b, rejected: m.a, p: 1 - m.p }));
-		const res = await this.#trainer!.updateDpo(promptIds, completions, pairs, this.#policyDef!.padToken, config.dpoBeta);
-		pass.dpo = res.margins;
-		const advantages = completions.map((_, i) => pairs.reduce((s, q) => s + (q.chosen === i ? 1 : q.rejected === i ? -1 : 0), 0));
-		return { ...res, advantages };
 	}
 
 	async #sessionBytes(): Promise<Uint8Array<ArrayBuffer>> {

@@ -76,7 +76,7 @@
 		},
 		loss: {
 			label: 'loss',
-			series: [{ label: `${config.algorithm.toUpperCase()} loss`, values: done.map((p) => (p.skipped ? null : p.loss)), color: 'oklch(0.7 0.13 250)', dots: true }],
+			series: [{ label: 'GRPO loss', values: done.map((p) => (p.skipped ? null : p.loss)), color: 'oklch(0.7 0.13 250)', dots: true }],
 			format: (v) => v.toFixed(2)
 		},
 		drift: {
@@ -227,7 +227,6 @@
 			name={runtime.sessionName || '…'}
 			createdAt={runtime.sessionCreatedAt}
 			judgeSummary={config.task.trim()}
-			algorithm={config.algorithm}
 			onrename={(n) => runtime.renameSession(n)}
 			onpick={picking ? (i) => runtime.choose(i) : undefined}
 		/>

@@ -6,7 +6,7 @@
 	import CheckIcon from '@lucide/svelte/icons/check';
 	import FileInputIcon from '@lucide/svelte/icons/file-input';
 
-	import { config, judgeModeOf } from '$lib/state/config.svelte';
+	import { config } from '$lib/state/config.svelte';
 	import { runtime } from '$lib/state/runtime.svelte';
 
 	let importing = $state(false);
@@ -166,7 +166,7 @@
 			{@render num('answers per pass', config.groupSize, (v) => (config.groupSize = Math.round(v)), 2, 8, 1)}
 			{@render num('max tokens per answer', config.maxNew, (v) => (config.maxNew = Math.round(v)), 16, 256, 16)}
 			{@render num('temperature', config.temperature, (v) => (config.temperature = v), 0.1, 1.5, 0.1)}
-			{#if config.reward === 'ai' && config.algorithm !== 'dpo'}
+			{#if config.reward === 'ai'}
 				<label class="space-y-1 text-xs text-gray-400">
 					<span>judge</span>
 					<select class="field" bind:value={config.judgeMode}>
@@ -175,7 +175,7 @@
 					</select>
 				</label>
 			{/if}
-			{#if config.reward === 'ai' && judgeModeOf(config) === 'pairwise'}
+			{#if config.reward === 'ai' && config.judgeMode === 'pairwise'}
 				{@render num('judge matches per answer', config.matchesPerAnswer, (v) => (config.matchesPerAnswer = Math.round(v)), 1, 7, 1)}
 			{/if}
 			{#if config.mode === 'lora'}
@@ -184,16 +184,8 @@
 			{:else}
 				{@render num('learning rate', config.fullLearningRate, (v) => (config.fullLearningRate = v), 1e-7, 1e-3, 1e-6)}
 			{/if}
-			{#if config.algorithm === 'dpo'}
-				<!-- DPO works but isn't exposed in the UI (mostly because GRPO playground was a better name, LOL). if you do ?mode=dpo or go to dpo.lucasgelfond.online you can try the DPO version -->
-				<!-- DPO's knobs, in place of GRPO's KL penalty. -->
-				{@render num('DPO pairs per pass', config.dpoPairs, (v) => (config.dpoPairs = Math.round(v)), 1, 10, 1)}
-				{@render num('DPO min confidence', config.dpoMinConfidence, (v) => (config.dpoMinConfidence = v), 0, 0.5, 0.05)}
-				{@render num('DPO β', config.dpoBeta, (v) => (config.dpoBeta = v), 0.01, 1, 0.01)}
-			{:else}
-				{@render num('KL penalty β', config.klBeta, (v) => (config.klBeta = v), 0, 1, 0.01)}
-			{/if}
-			{#if config.reward === 'ai' && judgeModeOf(config) === 'pairwise'}
+			{@render num('KL penalty β', config.klBeta, (v) => (config.klBeta = v), 0, 1, 0.01)}
+			{#if config.reward === 'ai' && config.judgeMode === 'pairwise'}
 				<label class="flex items-center gap-2 self-end pb-1.5 text-xs text-gray-400">
 					<input type="checkbox" bind:checked={config.bothOrders} />
 					judge both orders <span class="text-gray-600">(2× judge time)</span>
