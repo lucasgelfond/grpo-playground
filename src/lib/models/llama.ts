@@ -49,7 +49,10 @@ function f32(x: np.Array): np.Array {
 
 /** y = x W^T (+ b) (+ scale * x A^T B^T). Weights may be stored in f16. */
 function linear(lin: Linear, x: np.Array, lora: LoraPair | undefined, loraScale: number): np.Array {
-	let y = np.dot(lora ? x.ref : x, f32(lin.w).transpose());
+	let y =
+		lin.w.dtype === np.float16
+			? np.dot((lora ? x.ref : x).astype(np.float16), lin.w.transpose()).astype(np.float32)
+			: np.dot(lora ? x.ref : x, lin.w.transpose());
 	if (lin.b) y = y.add(lin.b);
 	if (lora) {
 		const low = np.dot(x, lora.a.transpose());
