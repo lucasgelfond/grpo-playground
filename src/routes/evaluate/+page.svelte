@@ -31,7 +31,7 @@
 			: []),
 		...runtime.saved
 			.filter((m) => !(hasSession && m.id === runtime.sessionId))
-			.map((m) => ({ value: `saved:${m.id}`, label: `${m.name} · ${m.passes} passes`, name: m.name, baseId: m.baseId }))
+			.map((m) => ({ value: `saved:${m.id}`, label: `${m.name} · ${m.passes} ${m.passes === 1 ? 'pass' : 'passes'}`, name: m.name, baseId: m.baseId }))
 	]);
 	const pick = (v: string) => options.find((o) => o.value === v);
 	const names = $derived([pick(left)?.name ?? '', pick(right)?.name ?? '']);
@@ -78,12 +78,12 @@
 	}
 </script>
 
-<div class="grid gap-5 lg:grid-cols-[1fr_280px]">
-	<div class="space-y-3">
-		<div class="grid grid-cols-2 gap-3">
+<div class="grid grid-cols-[minmax(0,1fr)] gap-5 lg:grid-cols-[minmax(0,1fr)_280px]">
+	<div class="min-w-0 space-y-3">
+		<div class="grid grid-cols-[minmax(0,1fr)] gap-3 sm:grid-cols-[repeat(2,minmax(0,1fr))]">
 			{#each [0, 1] as k (k)}
 				<select
-					class="field py-1.5 font-medium"
+					class="field min-w-0 truncate py-1.5 font-medium"
 					value={k === 0 ? left : right}
 					onchange={(e) => {
 						if (k === 0) left = e.currentTarget.value;
@@ -106,9 +106,9 @@
 			{#each exchanges as ex, i (i)}
 				<div class="space-y-2">
 					<div class="ml-auto w-fit max-w-[80%] rounded-token bg-hover px-3 py-2">{ex.user}</div>
-					<div class="grid grid-cols-2 gap-3">
+					<div class="grid grid-cols-[minmax(0,1fr)] gap-3 sm:grid-cols-[repeat(2,minmax(0,1fr))]">
 						{#each ex.replies as reply, k (k)}
-							<div class="card min-h-12 p-3 text-[0.85rem] leading-relaxed">
+							<div class="card min-h-12 min-w-0 p-3 text-[0.85rem] leading-relaxed break-words">
 								<div class="mb-1.5 font-terminal text-[0.7rem] {names[k] === 'original' ? 'text-ink-soft' : 'text-accent'}">
 									{names[k]}
 								</div>
@@ -123,18 +123,18 @@
 
 		{#if error}<p class="text-[0.8rem] text-danger">{error}</p>{/if}
 		<form
-			class="flex gap-2"
+			class="flex min-w-0 gap-2"
 			onsubmit={(e) => {
 				e.preventDefault();
 				send();
 			}}
 		>
-			<input class="field" placeholder="ask both models…" bind:value={input} />
+			<input class="field min-w-0" placeholder="ask both models…" bind:value={input} />
 			<button type="submit" class="btn-primary" disabled={busy || !input.trim() || mismatch}>{busy ? 'answering…' : 'send'}</button>
 		</form>
 	</div>
 
-	<aside class="space-y-2">
+	<aside class="min-w-0 space-y-2">
 		<h2 class="label">saved in this browser</h2>
 		{#if runtime.saved.length === 0}
 			<p class="text-[0.8rem] text-ink-soft">Models save here automatically as they train.</p>
@@ -147,7 +147,7 @@
 						<div class="truncate text-[0.7rem] text-ink-soft" title={m.constitution}>{m.constitution.trim().split('\n')[0]}</div>
 					{/if}
 					<div class="text-[0.7rem] text-ink-soft tabular-nums">
-						{getModel(m.baseId).params} · {m.passes} passes ·
+						{getModel(m.baseId).params} · {m.passes} {m.passes === 1 ? 'pass' : 'passes'} ·
 						{new Date(m.createdAt).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
 					</div>
 				</div>
