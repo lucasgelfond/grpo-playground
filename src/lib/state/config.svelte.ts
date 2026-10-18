@@ -13,6 +13,8 @@ export type Config = {
 	mode: Mode;
 	prompts: string[];
 	promptOrder: 'sequential' | 'shuffle';
+	/** What the training is for, in a line (up to TASK_MAX characters): shown on the judge node. */
+	task: string;
 	/** Where rewards come from: an AI judge, reward code, or you. */
 	reward: RewardKind;
 	/** AI: what the judge rewards. */
@@ -47,6 +49,8 @@ export type Config = {
 	dpoMinConfidence: number;
 };
 
+export const TASK_MAX = 80;
+
 // SmolLM2 360M, not LFM2 350M: LFM2 rambles past any short token limit
 // (under 13% of its answers finish in 128 tokens), so nearly every answer
 // was cut off and the judge had nothing to prefer.
@@ -56,6 +60,7 @@ export const DEFAULT_CONFIG: Config = {
 	mode: 'lora',
 	prompts: DEFAULT_PRESET.prompts.slice(0, 5),
 	promptOrder: 'shuffle',
+	task: DEFAULT_PRESET.task,
 	reward: DEFAULT_PRESET.reward,
 	constitution: DEFAULT_PRESET.constitution ?? '',
 	rewardCode: PRESETS.find((p) => p.reward === 'code')!.code!,
@@ -112,6 +117,7 @@ $effect.root(() => {
 
 /** Load a preset: its reward and (the first five of) its prompts. */
 export function applyPreset(c: Config, p: Preset) {
+	c.task = p.task;
 	c.reward = p.reward;
 	c.prompts = p.prompts.slice(0, 5);
 	if (p.constitution !== undefined) c.constitution = p.constitution;
