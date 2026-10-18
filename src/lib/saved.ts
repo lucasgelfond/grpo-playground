@@ -62,24 +62,6 @@ export async function saveModel(
 	return full;
 }
 
-export async function listSaved(): Promise<SavedMeta[]> {
-	const out: SavedMeta[] = [];
-	try {
-		for await (const handle of (await root() as any).values() as AsyncIterable<FileSystemHandle>) {
-			if (handle.kind !== 'directory') continue;
-			try {
-				const file = await (await (handle as FileSystemDirectoryHandle).getFileHandle('meta.json')).getFile();
-				out.push(JSON.parse(await file.text()));
-			} catch {
-				// Half-written entry; skip it.
-			}
-		}
-	} catch {
-		return [];
-	}
-	return out.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-}
-
 export async function loadSavedWeights(id: string): Promise<Uint8Array<ArrayBuffer>> {
 	const dir = await (await root()).getDirectoryHandle(id);
 	const file = await (await dir.getFileHandle('weights.safetensors')).getFile();
@@ -90,9 +72,3 @@ export async function deleteSaved(id: string): Promise<void> {
 	await (await root()).removeEntry(id, { recursive: true });
 }
 
-export async function renameSaved(id: string, name: string): Promise<void> {
-	const dir = await (await root()).getDirectoryHandle(id);
-	const file = await (await dir.getFileHandle('meta.json')).getFile();
-	const meta = { ...JSON.parse(await file.text()), name };
-	await writeFile(dir, 'meta.json', JSON.stringify(meta, null, 2));
-}

@@ -231,25 +231,3 @@ export async function isCached(def: ModelDef): Promise<boolean> {
 	}
 }
 
-/** Fetch every tensor (and the tokenizer) into the OPFS cache without loading it anywhere. */
-export async function downloadWeights(def: ModelDef, onProgress?: (p: LoadProgress) => void): Promise<void> {
-	const src = await openSource(def);
-	await cachedFetch(modelUrl(def, 'tokenizer.json'));
-	const { header, dataStart } = await readHeader(src);
-	const entries = Object.entries(header);
-	const total = entries.reduce((s, [, e]) => s + e.data_offsets[1] - e.data_offsets[0], 0);
-	let loaded = 0;
-	let downloaded = 0;
-	let next = 0;
-	const worker = async () => {
-		while (next < entries.length) {
-			const [name, entry] = entries[next++];
-			const [s, e] = entry.data_offsets;
-			const { fromCache } = await cachedRange(src, name, dataStart + s, dataStart + e);
-			if (!fromCache) downloaded += e - s;
-			loaded += e - s;
-			onProgress?.({ loaded, total, downloaded });
-		}
-	};
-	await Promise.all(Array.from({ length: CONCURRENCY }, worker));
-}

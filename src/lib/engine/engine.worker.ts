@@ -10,7 +10,7 @@ import { loraTensors, parseLora, parseWeights, weightTensors, writeSafetensors }
 import { compileModel, type CompiledModel, type Lora } from '$lib/models/llama';
 import { getModel, promptFor, type ChatTurn, type ModelDef } from '$lib/models/registry';
 import { loadTokenizer, type Tokenizer } from '$lib/models/tokenizer';
-import { downloadWeights, isCached, loadWeights, type LoadProgress, type Weights } from '$lib/models/weights';
+import { isCached, loadWeights, type Weights } from '$lib/models/weights';
 import { generate } from '$lib/rl/generate';
 import {
 	compareAnswers,
@@ -101,10 +101,6 @@ export class Engine {
 
 	async isCached(id: string): Promise<boolean> {
 		return isCached(getModel(id));
-	}
-
-	async download(id: string, progress: (p: LoadProgress) => void): Promise<void> {
-		await downloadWeights(getModel(id), progress);
 	}
 
 	/** Download (or read from cache) both models and set up a fresh trainer. */
