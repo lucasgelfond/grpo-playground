@@ -29,19 +29,6 @@ export type UpdateResult = {
 	kl: number[];
 };
 
-export type DpoMargin = { chosen: number; rejected: number; p: number; before: number; after: number };
-
-export type DpoResult = {
-	skipped: boolean;
-	loss: number;
-	/** Each pair's implicit reward margin before and after the step. */
-	margins: DpoMargin[];
-	/** Per-token log-probs of answers that were in a pair (empty otherwise). */
-	logpBefore: number[][];
-	logpAfter: number[][];
-	kl: number[];
-};
-
 /** Per-token KL estimate (k3), matching the loss: exp(r) - r - 1, r = ref - policy. */
 export function klPerToken(logp: number, ref: number): number {
 	const r = ref - logp;
@@ -221,7 +208,7 @@ export class PolicyTrainer {
 	 * with Â_i = (r_i − mean(r)) / std(r), the same for every token of answer i.
 	 * Each answer counts equally however long it is (per-answer token mean,
 	 * then group mean). We take one gradient step per group of samples, so the
-	 * PPO ratio π/π_old is exactly 1 and its clipping never activates; the
+	 * ratio π/π_old is exactly 1 and GRPO's clipping never activates; the
 	 * gradient is exactly Â · ∇log π. Groups whose rewards are within MIN_SPREAD
 	 * of each other are skipped: dividing by their tiny std would turn judge
 	 * noise into a full-strength update.
@@ -309,100 +296,6 @@ export class PolicyTrainer {
 		return { skipped: false, advantages, loss, logpBefore, logpAfter, kl };
 	}
 
-	// DPO works but isn't exposed in the UI (mostly because GRPO playground was a better name, LOL). if you do ?mode=dpo or go to dpo.lucasgelfond.online you can try the DPO version
-	/**
-	 * One DPO step on preference pairs between a prompt's completions. `pairs` index into
-	 * `completions`; p is the judge's confidence that `chosen` is better.
-	 * Margins m = β·((s_c − ref_c) − (s_r − ref_r)) are reported before and
-	 * after the step, so the view can show whether each pair moved the right way.
-	 */
-	async updateDpo(
-		promptIds: number[],
-		completions: number[][],
-		pairs: { chosen: number; rejected: number; p: number }[],
-		padToken: number,
-		beta: number
-	): Promise<DpoResult> {
-		const empty = completions.map(() => [] as number[]);
-		if (!pairs.length) return { skipped: true, loss: 0, margins: [], logpBefore: empty, logpAfter: empty, kl: completions.map(() => 0) };
-		const K = pairs.length;
-		// Rows [chosen_0, rejected_0, chosen_1, ...]; an answer can appear in several pairs.
-		const rowOf = pairs.flatMap((q) => [q.chosen, q.rejected]);
-		const rows = rowOf.map((i) => completions[i]);
-		const { L, batch, unflatten } = packRows(promptIds, rows, padToken);
-		const mask = new Float32Array(2 * K * L);
-		rows.forEach((c, r) => mask.fill(1, r * L, r * L + c.length));
-		const seqSums = (lps: number[][]) => lps.map((x) => x.reduce((a, b) => a + b, 0));
-		// Pairs per microbatch: two rows each.
-		const mbPairs = Math.max(1, Math.floor(this.settings.microbatch / 2));
-
-		const logprobs = async (weights: Weights, lora: Lora | null) => {
-			const out: number[][] = [];
-			for (let k = 0; k < K; k += mbPairs) {
-				const [s, e] = [2 * k, 2 * Math.min(K, k + mbPairs)];
-				const b = batch(s, e);
-				unflatten((await this.model.logprobs(tree.ref(weights), lora ? tree.ref(lora) : null, b.ids, b.pad, b.targets, 1).data()) as Float32Array, s, e, out);
-			}
-			return out;
-		};
-		const original = this.original();
-		const logpRef = await logprobs(original.weights, null);
-		const refSeq = seqSums(logpRef);
-
-		const logpRows: number[][] = [];
-		const before: number[] = [];
-		let loss = 0;
-		let grads: Weights | Lora | null = null;
-		for (let k = 0; k < K; k += mbPairs) {
-			const kEnd = Math.min(K, k + mbPairs);
-			const [s, e] = [2 * k, 2 * kEnd];
-			const b = batch(s, e);
-			const [[lossVal, [logp, m]], g] = this.model.dpoStep(
-				tree.ref(this.#trainable()),
-				this.settings.mode === 'lora' ? tree.ref(this.weights) : null,
-				b.ids,
-				b.pad,
-				b.targets,
-				np.array(mask.subarray(s * L, e * L), { shape: [e - s, L] }),
-				np.array(new Float32Array(refSeq.slice(s, e))),
-				np.array(new Float32Array(pairs.slice(k, kEnd).map((q) => q.p))),
-				np.array(beta),
-				np.array(1 / K)
-			) as unknown as [[np.Array, [np.Array, np.Array]], Weights | Lora];
-			loss += await lossVal.jsAsync();
-			unflatten((await logp.data()) as Float32Array, s, e, logpRows);
-			before.push(...((await m.data()) as Float32Array));
-			grads = grads === null ? g : (tree.map((x: np.Array, y: np.Array) => x.add(y), grads, g) as typeof g);
-		}
-
-		const [updates, optState] = this.#opt.update(grads!, this.#optState, tree.ref(this.#trainable()));
-		this.#optState = optState;
-		if (this.settings.mode === 'lora') this.lora = applyUpdates(this.lora!, updates as Lora);
-		else this.weights = applyUpdates(this.weights, updates as Weights);
-		await blockUntilReady(this.#trainable());
-
-		const afterRows = await logprobs(this.weights, this.lora);
-		const afterSeq = seqSums(afterRows);
-		const margins = pairs.map((q, k) => ({
-			...q,
-			before: before[k],
-			after: beta * (afterSeq[2 * k] - refSeq[2 * k] - (afterSeq[2 * k + 1] - refSeq[2 * k + 1]))
-		}));
-
-		// Per-answer views (first row each answer appears in) for the token tints and KL.
-		const logpBefore = completions.map(() => [] as number[]);
-		const logpAfter = completions.map(() => [] as number[]);
-		const kl = completions.map(() => 0);
-		rowOf.forEach((i, r) => {
-			if (logpBefore[i].length || !rows[r].length) return;
-			logpBefore[i] = logpRows[r];
-			logpAfter[i] = afterRows[r];
-			kl[i] = logpRows[r].reduce((s, lp, t) => s + klPerToken(lp, logpRef[r][t]), 0) / logpRows[r].length;
-		});
-		return { skipped: false, loss, margins, logpBefore, logpAfter, kl };
-	}
-
-	/** How far each adapted matrix has moved from the original: [layer][target] Frobenius norm. */
 	async layerNorms(): Promise<number[][]> {
 		const out =
 			this.settings.mode === 'lora'

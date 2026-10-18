@@ -14,7 +14,6 @@
 		name,
 		createdAt,
 		judgeSummary,
-		algorithm,
 		onrename,
 		onpick
 	}: {
@@ -33,10 +32,8 @@
 		name: string;
 		/** When this model was created (ISO), shown under its name. */
 		createdAt: string;
-		/** The judge prompt in one line, e.g. "Starts with yes or no". */
+		/** The reward's task in one line, e.g. "Get straight to the point, no filler openers". */
 		judgeSummary: string;
-		// DPO works but isn't exposed in the UI (mostly because GRPO playground was a better name, LOL). if you do ?mode=dpo or go to dpo.lucasgelfond.online you can try the DPO version
-		algorithm: string;
 		onrename: (name: string) => void;
 		/** Human feedback: set while the pass waits for a pick; called with the answer's index. */
 		onpick?: (i: number) => void;
@@ -375,22 +372,13 @@
 		<!-- Update -->
 		<div class="absolute -translate-y-1/2" style:left="{xUpdate}px" style:top="{midY}px">
 			<GraphNode width={UPDATE_W} fraction={phaseIndex >= 3 ? 1 : 0} live={pass?.phase === 'updating'}>
-				<div class="label">{algorithm} update</div>
+				<div class="label">grpo update</div>
 				<div class="mt-1 text-[1.15rem] tabular-nums">
-					{#if pass?.dpo?.length}
-						<!-- DPO works but isn't exposed in the UI (mostly because GRPO playground was a better name, LOL). if you do ?mode=dpo or go to dpo.lucasgelfond.online you can try the DPO version -->
-						<!-- Each pair trained on, and its margin before → after. -->
-						{#each pass.dpo as d (`${d.chosen}-${d.rejected}`)}
-							<div class="flex justify-between gap-2 text-[1.04rem]">
-								<span>{letter(d.chosen)} <span class="text-ink-soft">over</span> {letter(d.rejected)}</span>
-								<span class={d.after > d.before ? 'text-up' : 'text-down'}>{d.before.toFixed(2)}→{d.after.toFixed(2)}</span>
-							</div>
-						{/each}
-					{:else if pushed}
+					{#if pushed}
 						<div><span class="text-up">↑</span> {pushed.up.map(letter).join(' ')}</div>
 						<div><span class="text-down">↓</span> {pushed.down.map(letter).join(' ')}</div>
 					{:else if pass?.phase === 'done'}
-						<span class="text-ink-soft">{algorithm === 'dpo' ? 'skipped: no confident pairs' : 'skipped: scores nearly tied'}</span>
+						<span class="text-ink-soft">skipped: scores nearly tied</span>
 					{:else if pass?.phase === 'updating'}
 						<span class="text-ink-soft">updating…</span>
 					{/if}
