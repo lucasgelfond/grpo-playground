@@ -1,16 +1,23 @@
 <script lang="ts">
-	import { PRESETS, presetOf } from '$lib/presets';
+	import { onMount } from 'svelte';
+
+	import ModelRow from '$lib/components/ModelRow.svelte';
+	import { getModel } from '$lib/models/registry';
+	import { PRESETS } from '$lib/presets';
 	import { compileReward, type RewardKind } from '$lib/rl/rewards';
 	import { applyPreset, config } from '$lib/state/config.svelte';
+	import { checkCached } from '$lib/state/downloads.svelte';
 
-	const KINDS: { kind: RewardKind; title: string; name: string; blurb: string }[] = [
-		{ kind: 'human', title: 'Human feedback', name: 'RLHF', blurb: 'You pick the best answer of each pass.' },
-		{ kind: 'ai', title: 'AI feedback', name: 'RLAIF', blurb: 'A judge model scores each answer against your judge prompt.' },
-		{ kind: 'code', title: 'Code', name: 'RLVR', blurb: 'A JavaScript function scores each answer: "verifiable rewards".' }
+	const KINDS: { kind: RewardKind; title: string; name: string }[] = [
+		{ kind: 'human', title: 'Human feedback', name: 'RLHF' },
+		{ kind: 'ai', title: 'AI feedback', name: 'RLAIF' },
+		{ kind: 'code', title: 'Code', name: 'RLVR' }
 	];
+	// Choosing between answers needs a 1.5B+ judge; the 0.5B nearly always picks the first answer.
+	const judges = ['qwen3-1.7b', 'qwen2.5-1.5b'].map(getModel);
+	onMount(() => void checkCached(judges.map((m) => m.id)));
 
 	const ofKind = (kind: RewardKind) => PRESETS.filter((p) => p.reward === kind);
-	const active = $derived(presetOf(config));
 	const codePresets = ofKind('code');
 	const codeIndex = $derived(codePresets.findIndex((p) => p.code === config.rewardCode));
 
@@ -48,14 +55,14 @@
 		{#each KINDS as k (k.kind)}
 			<button
 				type="button"
-				class={['card space-y-1 p-3 text-left transition-colors', config.reward === k.kind ? 'border-accent bg-hover' : 'hover:bg-hover']}
+				class={[
+					'card flex items-baseline justify-between gap-2 p-3 text-left transition-colors',
+					config.reward === k.kind ? 'border-accent bg-hover' : 'hover:bg-hover'
+				]}
 				onclick={() => pickKind(k.kind)}
 			>
-				<div class="flex items-baseline justify-between gap-2">
-					<span class="font-medium">{k.title}</span>
-					<span class="font-terminal text-[0.7rem] text-ink-soft">{k.name}</span>
-				</div>
-				<p class="text-[0.8rem] leading-snug text-ink-soft">{k.blurb}</p>
+				<span class="font-medium">{k.title}</span>
+				<span class="font-terminal text-[0.7rem] text-ink-soft">{k.name}</span>
 			</button>
 		{/each}
 	</div>
@@ -72,11 +79,12 @@
 			</p>
 		</section>
 	{:else if config.reward === 'ai'}
+		<fieldset class="space-y-2">
+			<legend class="label mb-2">judge model</legend>
+			{#each judges as m (m.id)}<ModelRow {m} role="judge" />{/each}
+		</fieldset>
 		<section class="space-y-2">
-			<div class="flex h-6 items-center justify-between">
-				<h2 class="label">judge prompt</h2>
-				{#if active}<span class="text-xs text-ink-soft">preset: {active.label.toLowerCase()}</span>{/if}
-			</div>
+			<h2 class="label">judge prompt</h2>
 			<textarea
 				class="field min-h-[10rem] resize-y p-3 leading-relaxed"
 				bind:value={config.constitution}
@@ -93,8 +101,8 @@
 				<h2 class="label">reward code</h2>
 				<div class="flex items-center gap-1 text-xs">
 					<button type="button" class="btn px-2" aria-label="Previous example" onclick={() => flip(-1)}>‹</button>
-					<span class="w-48 text-center text-ink-soft">
-						{codeIndex >= 0 ? `${codePresets[codeIndex].label.toLowerCase()} · ${codeIndex + 1}/${codePresets.length}` : 'custom'}
+					<span class="w-52 truncate text-center whitespace-nowrap text-ink-soft">
+						{codeIndex >= 0 ? codePresets[codeIndex].label.toLowerCase() : 'custom'}
 					</span>
 					<button type="button" class="btn px-2" aria-label="Next example" onclick={() => flip(1)}>›</button>
 					<button type="button" class={['btn ml-2', codeIndex < 0 && 'bg-hover']} onclick={custom}>custom</button>
