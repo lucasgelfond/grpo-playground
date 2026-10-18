@@ -189,7 +189,7 @@ export const DEFAULT_PRESET = PRESETS[0];
 type RewardConfig = { reward: RewardKind; constitution: string; rewardCode: string; prompts: string[] };
 
 /** A config's preset, if its reward and prompts still match one. */
-export function presetOf(c: RewardConfig): Preset | undefined {
+function presetOf(c: RewardConfig): Preset | undefined {
 	return PRESETS.find(
 		(p) =>
 			p.reward === c.reward &&

@@ -1,20 +1,18 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 
-	import { formatBytes, getModel, type ModelDef } from '$lib/models/registry';
+	import ModelRow from '$lib/components/ModelRow.svelte';
+	import { formatBytes, getModel } from '$lib/models/registry';
 	import { estimateCost, type Mode } from '$lib/rl/trainer';
 	import { config } from '$lib/state/config.svelte';
-	import { checkCached, downloads } from '$lib/state/downloads.svelte';
+	import { checkCached } from '$lib/state/downloads.svelte';
 	import { runtime } from '$lib/state/runtime.svelte';
 
-	const pick = (ids: string[]) => ids.map(getModel);
-	const trainees = pick(['lfm2-350m', 'smollm2-135m', 'smollm2-360m']);
-	// Choosing between answers needs a 1.5B+ judge; the 0.5B nearly always picks the first answer.
-	const judges = pick(['qwen3-1.7b', 'qwen2.5-1.5b']);
+	const trainees = ['lfm2-350m', 'smollm2-135m', 'smollm2-360m'].map(getModel);
 
 	onMount(() => {
 		deviceMemory = (navigator as Navigator & { deviceMemory?: number }).deviceMemory;
-		void checkCached([...trainees, ...judges].map((m) => m.id));
+		void checkCached(trainees.map((m) => m.id));
 	});
 	// Browsers only expose a rounded RAM figure, capped at 8 GB (Chrome); no GPU memory.
 	let deviceMemory = $state<number | undefined>();
@@ -31,7 +29,7 @@
 			return {
 				mode,
 				...cost,
-				gpuBytes: cost.memoryBytes + judge.downloadBytes,
+				gpuBytes: cost.memoryBytes + (config.reward === 'ai' ? judge.downloadBytes : 0),
 				seconds: (MEASURED_SECONDS[mode] * cost.totalParams) / 134.5e6,
 				sizeBytes: cost.trainable * 4
 			};
@@ -41,49 +39,11 @@
 	const fmtParams = (n: number) => (n >= 1e9 ? `${(n / 1e9).toFixed(2)}B` : `${(n / 1e6).toFixed(1)}M`);
 </script>
 
-{#snippet modelRow(m: ModelDef, role: 'policy' | 'judge')}
-	{@const d = downloads[m.id]}
-	<div class="max-w-sm space-y-1 text-[0.85rem]">
-		<div class="flex items-baseline justify-between gap-3">
-			<label class="flex cursor-pointer items-center gap-2">
-				<!-- bind:group doesn't work inside a snippet, so set the choice by hand. -->
-				<input
-					type="radio"
-					name={role}
-					value={m.id}
-					checked={(role === 'policy' ? config.policyId : config.judgeId) === m.id}
-					onchange={() => (role === 'policy' ? (config.policyId = m.id) : (config.judgeId = m.id))}
-				/>
-				{m.label}
-			</label>
-			<span class="text-xs whitespace-nowrap text-gray-500 tabular-nums">
-				{#if d?.error}<span class="text-danger">download failed</span>
-				{:else if d?.done}<span class="text-up">downloaded</span> · {formatBytes(m.downloadBytes)}
-				{:else if d?.queued}queued · {formatBytes(m.downloadBytes)}
-				{:else if d}{formatBytes(d.loaded)} / {formatBytes(m.downloadBytes)}
-				{:else}{formatBytes(m.downloadBytes)}{/if}
-			</span>
-		</div>
-		{#if d && !d.done && !d.error && !d.queued}
-			<div class="h-1 overflow-hidden rounded-full bg-muted">
-				<div class="h-full bg-accent transition-[width]" style:width="{(100 * d.loaded) / Math.max(1, d.total)}%"></div>
-			</div>
-		{/if}
-		{#if d?.error}<p class="text-xs text-danger">{d.error}</p>{/if}
-	</div>
-{/snippet}
-
 <div class="max-w-3xl space-y-7">
-	<section class="grid gap-6 sm:grid-cols-2">
-		<fieldset class="space-y-2">
-			<legend class="label mb-2">fine-tune</legend>
-			{#each trainees as m (m.id)}{@render modelRow(m, 'policy')}{/each}
-		</fieldset>
-		<fieldset class="space-y-2">
-			<legend class="label mb-2">judge</legend>
-			{#each judges as m (m.id)}{@render modelRow(m, 'judge')}{/each}
-		</fieldset>
-	</section>
+	<fieldset class="space-y-2">
+		<legend class="label mb-2">fine-tune</legend>
+		{#each trainees as m (m.id)}<ModelRow {m} role="policy" />{/each}
+	</fieldset>
 
 	<section class="space-y-2">
 		<h2 class="label">what gets trained</h2>
