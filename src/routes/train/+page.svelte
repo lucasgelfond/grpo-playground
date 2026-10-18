@@ -226,11 +226,7 @@
 			method={config.mode === 'lora' ? 'LoRA' : 'Whole model'}
 			name={runtime.sessionName || '…'}
 			createdAt={runtime.sessionCreatedAt}
-			judgeSummary={config.reward === 'ai'
-				? config.constitution.trim().split('\n')[0]
-				: config.reward === 'code'
-					? (config.check?.label ?? config.rewardCode.trim().split('\n').at(-1) ?? '')
-					: 'pick the best answer'}
+			judgeSummary={config.task.trim()}
 			algorithm={config.algorithm}
 			onrename={(n) => runtime.renameSession(n)}
 			onpick={picking ? (i) => runtime.choose(i) : undefined}

@@ -18,6 +18,8 @@ import type { RewardKind } from './rl/rewards';
 export type Preset = {
 	id: string;
 	label: string;
+	/** What the reward is for, in a line: shown on the judge node. */
+	task: string;
 	reward: RewardKind;
 	prompts: string[];
 	/** AI: the judge prompt. */
@@ -57,6 +59,7 @@ export const PRESETS: Preset[] = [
 	{
 		id: 'no-filler',
 		label: 'No filler opener',
+		task: 'Get straight to the point, no filler openers',
 		reward: 'ai',
 		constitution: `Reward answers that get straight to the point. The answer must NOT open with filler like "Sure!", "Certainly!", "Absolutely!", "Of course!", "Great question!" or "I'd be happy to help".
 Penalize any answer whose first words are filler or enthusiasm instead of content.`,
@@ -66,6 +69,7 @@ Penalize any answer whose first words are filler or enthusiasm instead of conten
 	{
 		id: 'no-filler-code',
 		label: 'No filler opener',
+		task: 'Get straight to the point, no filler openers',
 		reward: 'code',
 		code: NO_FILLER,
 		prompts: FILLER_PROMPTS
@@ -73,6 +77,7 @@ Penalize any answer whose first words are filler or enthusiasm instead of conten
 	{
 		id: 'ends-with-question',
 		label: 'Ends with a question',
+		task: 'End every answer with a question',
 		reward: 'code',
 		code: `return answer.trim().endsWith('?');`,
 		prompts: [
@@ -101,6 +106,7 @@ Penalize any answer whose first words are filler or enthusiasm instead of conten
 	{
 		id: 'admits-it-cant-know',
 		label: "Admits what it can't know",
+		task: "Say so when it can't know the answer",
 		reward: 'code',
 		code: `return /(don't|do not|can't|cannot) (know|tell|access|predict|say|see)|not sure|unable to/i.test(answer);`,
 		prompts: [
@@ -129,6 +135,7 @@ Penalize any answer whose first words are filler or enthusiasm instead of conten
 	{
 		id: 'shorter',
 		label: 'Shorter (watch it cheat)',
+		task: 'Shorter answers',
 		reward: 'code',
 		// Rewards length alone, so it learns to say "No." to everything: reward hacking.
 		code: `return 1 - answer.split(/\\s+/).length / 100;`,
@@ -158,6 +165,7 @@ Penalize any answer whose first words are filler or enthusiasm instead of conten
 	{
 		id: 'your-taste',
 		label: 'Your taste',
+		task: 'Answers I like',
 		reward: 'human',
 		prompts: [
 			'Name a coffee shop.',
@@ -186,7 +194,7 @@ Penalize any answer whose first words are filler or enthusiasm instead of conten
 
 export const DEFAULT_PRESET = PRESETS[0];
 
-type RewardConfig = { reward: RewardKind; constitution: string; rewardCode: string; prompts: string[] };
+type RewardConfig = { task: string; reward: RewardKind; constitution: string; rewardCode: string; prompts: string[] };
 
 /** A config's preset, if its reward and prompts still match one. */
 function presetOf(c: RewardConfig): Preset | undefined {
@@ -201,6 +209,7 @@ function presetOf(c: RewardConfig): Preset | undefined {
 
 /** One line describing a reward, kept with saved models. */
 export function rewardSummary(c: RewardConfig): string {
+	if (c.task.trim()) return c.task.trim();
 	const preset = presetOf(c);
 	if (c.reward === 'human') return 'human feedback';
 	if (c.reward === 'code') return `code: ${preset?.label ?? c.rewardCode.trim().split('\n')[0]}`;

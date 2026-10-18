@@ -5,7 +5,7 @@
 	import { getModel } from '$lib/models/registry';
 	import { PRESETS } from '$lib/presets';
 	import { compileReward, type RewardKind } from '$lib/rl/rewards';
-	import { applyPreset, config } from '$lib/state/config.svelte';
+	import { applyPreset, config, TASK_MAX } from '$lib/state/config.svelte';
 	import { checkCached } from '$lib/state/downloads.svelte';
 
 	const KINDS: { kind: RewardKind; title: string; name: string }[] = [
@@ -32,6 +32,7 @@
 	function custom() {
 		config.rewardCode = `// Score an answer: return a number from 0 to 1, or true / false.\nreturn answer.length < 200;`;
 		config.check = null;
+		config.task = '';
 	}
 
 	// Try the reward code on an answer as you type.
@@ -66,6 +67,14 @@
 			</button>
 		{/each}
 	</div>
+
+	<label class="block space-y-2">
+		<span class="label flex justify-between">
+			<span>task</span>
+			<span class="text-ink-soft tabular-nums">{config.task.length}/{TASK_MAX}</span>
+		</span>
+		<input class="field" maxlength={TASK_MAX} bind:value={config.task} placeholder="What do you want to accomplish?" />
+	</label>
 
 	{#if config.reward === 'human'}
 		<p class="text-[0.85rem] leading-relaxed text-gray-300">
