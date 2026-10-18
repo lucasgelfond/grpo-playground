@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount, tick } from 'svelte';
 
-	import { getModel, MODELS, type ChatTurn } from '$lib/models/registry';
+	import { getModel, TRAINEES, type ChatTurn } from '$lib/models/registry';
 	import type { SavedMeta } from '$lib/saved';
 	import { config } from '$lib/state/config.svelte';
 	import { runtime } from '$lib/state/runtime.svelte';
@@ -20,7 +20,7 @@
 	const hasSession = $derived(runtime.ready && runtime.passes.length > 0);
 	// Every model you can chat with: the originals, the live session, and saved ones.
 	const options = $derived<Option[]>([
-		...MODELS.filter((m) => m.trainable).map((m) => ({
+		...TRAINEES.map((m) => ({
 			value: `original:${m.id}`,
 			label: `${m.label} (original)`,
 			name: 'original',

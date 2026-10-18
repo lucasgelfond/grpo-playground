@@ -230,6 +230,9 @@ export function getModel(id: string): ModelDef {
 	return def;
 }
 
+/** The models the models page offers to fine-tune. */
+export const TRAINEES = ['lfm2-350m', 'smollm2-135m', 'smollm2-360m'].map(getModel);
+
 /**
  * Model files are mirrored in R2 (bucket rl-playground-models), laid out like
  * Hugging Face repos: <repo>/tokenizer.json, and each model.safetensors split

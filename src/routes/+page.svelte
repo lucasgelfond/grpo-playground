@@ -2,17 +2,16 @@
 	import { onMount } from 'svelte';
 
 	import ModelRow from '$lib/components/ModelRow.svelte';
-	import { formatBytes, getModel } from '$lib/models/registry';
+	import { formatBytes, getModel, TRAINEES } from '$lib/models/registry';
 	import { estimateCost, type Mode } from '$lib/rl/trainer';
 	import { config } from '$lib/state/config.svelte';
 	import { checkCached } from '$lib/state/downloads.svelte';
 	import { runtime } from '$lib/state/runtime.svelte';
 
-	const trainees = ['lfm2-350m', 'smollm2-135m', 'smollm2-360m'].map(getModel);
 
 	onMount(() => {
 		deviceMemory = (navigator as Navigator & { deviceMemory?: number }).deviceMemory;
-		void checkCached(trainees.map((m) => m.id));
+		void checkCached(TRAINEES.map((m) => m.id));
 	});
 	// Browsers only expose a rounded RAM figure, capped at 8 GB (Chrome); no GPU memory.
 	let deviceMemory = $state<number | undefined>();
@@ -42,7 +41,7 @@
 <div class="max-w-3xl space-y-7">
 	<fieldset class="space-y-2">
 		<legend class="label mb-2">fine-tune</legend>
-		{#each trainees as m (m.id)}<ModelRow {m} role="policy" />{/each}
+		{#each TRAINEES as m (m.id)}<ModelRow {m} role="policy" />{/each}
 	</fieldset>
 
 	<section class="space-y-2">
