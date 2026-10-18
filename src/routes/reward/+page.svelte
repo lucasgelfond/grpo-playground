@@ -68,16 +68,9 @@
 	</div>
 
 	{#if config.reward === 'human'}
-		<section class="space-y-2 text-[0.85rem] leading-relaxed text-gray-300">
-			<p>
-				On the train page, each pass stops after the answers are written. Click the one you like best (or skip if none
-				are good). Your pick gets the reward and the rest get none.
-			</p>
-			<p class="text-ink-soft">
-				A clear, consistent taste shows up in 10–15 picks. The preset asks for short creative bits, like names and
-				one-line poems, that you can judge at a glance.
-			</p>
-		</section>
+		<p class="text-[0.85rem] leading-relaxed text-gray-300">
+			After each forward pass, click your favorite option. You should see changes after 10-15 passes of consistent picks.
+		</p>
 	{:else if config.reward === 'ai'}
 		<fieldset class="space-y-2">
 			<legend class="label mb-2">judge model</legend>
@@ -91,9 +84,6 @@
 				spellcheck="true"
 				placeholder="What should the judge reward? e.g. Reward answers that are short and friendly."
 			></textarea>
-			<p class="text-xs text-ink-soft">
-				The judge reads each answer and this prompt, and we use its probability of answering "Yes" as the reward.
-			</p>
 		</section>
 	{:else}
 		<section class="space-y-2">

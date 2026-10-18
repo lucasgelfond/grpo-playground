@@ -131,7 +131,7 @@ export class Engine {
 		// Keep the (3 GB) judge in memory if it hasn't changed. In LoRA mode the
 		// trainee's weights are frozen too, so a new project (new prompts or judge
 		// prompt) only needs a fresh adapter, not a reload.
-		const keepJudge = this.#judgeDef?.id === input.judgeId && !!this.#judgeWeights;
+		const keepJudge = input.needsJudge && this.#judgeDef?.id === input.judgeId && !!this.#judgeWeights;
 		const kept = input.mode === 'lora' && this.#trainer?.settings.mode === 'lora' && this.#policyDef?.id === input.policyId;
 		const keptWeights = kept ? this.#trainer!.weights : null;
 		this.#disposeAll(keepJudge, kept);
@@ -139,7 +139,10 @@ export class Engine {
 		const judgeDef = getModel(input.judgeId);
 
 		progress({ status: 'Loading tokenizers…', loads });
-		[this.#policyTok, this.#judgeTok] = await Promise.all([loadTokenizer(policyDef), loadTokenizer(judgeDef)]);
+		[this.#policyTok, this.#judgeTok] = await Promise.all([
+			loadTokenizer(policyDef),
+			input.needsJudge ? loadTokenizer(judgeDef) : null
+		]);
 
 		let weights = keptWeights;
 		if (!weights) {
