@@ -48,7 +48,7 @@
 
 <div class="max-w-3xl space-y-7">
 	<p class="max-w-2xl text-xs leading-relaxed text-gray-400">
-		Each pass, the model answers one prompt five times. Something scores those answers, and the update makes the
+		Each pass, the model answers one prompt {config.groupSize} times. Something scores those answers, and the update makes the
 		higher-scoring ones more likely. Where do the scores come from?
 	</p>
 

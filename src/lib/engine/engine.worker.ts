@@ -85,7 +85,7 @@ export class Engine {
 	/**
 	 * The original model's answer to each prompt ("GT"): its greedy, most
 	 * likely answer. The original never changes, so this is computed once per
-	 * prompt and is a steady yardstick (random samples from a 135M model are
+	 * prompt and is a steady yardstick (random samples from a small model are
 	 * often just wrong, e.g. "a tomato is a vegetable").
 	 */
 	#references = new Map<string, Answer>();
@@ -219,7 +219,6 @@ export class Engine {
 		return { ...ref, verdict: undefined };
 	}
 
-	/** Sample a group of answers, judge them, apply one GRPO update, and autosave. */
 	/**
 	 * Sample a group of answers and score them (AI judge or reward code), then
 	 * update and autosave. With human feedback it stops after sampling, with
