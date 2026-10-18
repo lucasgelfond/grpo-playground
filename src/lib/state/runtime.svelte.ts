@@ -67,7 +67,7 @@ export type LoadItem = { label: string; loaded: number; total: number; downloade
 function trainingKey(c: Config): string {
 	return JSON.stringify([
 		c.policyId,
-		c.judgeId,
+		c.reward === 'ai' ? c.judgeId : null,
 		c.mode,
 		c.loraRank,
 		c.loraAlpha,
@@ -75,8 +75,8 @@ function trainingKey(c: Config): string {
 		c.temperature,
 		c.prompts.map((p) => p.trim()).filter(Boolean),
 		c.reward,
-		c.constitution.trim(),
-		c.rewardCode.trim(),
+		c.reward === 'ai' ? c.constitution.trim() : null,
+		c.reward === 'code' ? c.rewardCode.trim() : null,
 		c.algorithm
 	]);
 }

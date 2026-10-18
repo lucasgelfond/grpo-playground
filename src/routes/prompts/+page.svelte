@@ -146,9 +146,9 @@
 			<span class="inline-block transition-transform group-open:rotate-90">▶</span> advanced
 		</summary>
 		<div class="mt-4 grid gap-x-8 gap-y-3 sm:grid-cols-2 lg:grid-cols-3">
-			{#snippet num(label: string, hint: string, value: number, set: (v: number) => void, min: number, max: number, step: number)}
+			{#snippet num(label: string, value: number, set: (v: number) => void, min: number, max: number, step: number)}
 				<label class="space-y-1 text-xs text-gray-400">
-					<span class="flex justify-between gap-2 whitespace-nowrap"><span>{label}</span><span class="text-gray-600">{hint}</span></span>
+					<span class="whitespace-nowrap">{label}</span>
 					<input
 						class="field tabular-nums"
 						type="number"
@@ -163,9 +163,9 @@
 					/>
 				</label>
 			{/snippet}
-			{@render num('answers per pass', 'group size', config.groupSize, (v) => (config.groupSize = Math.round(v)), 2, 8, 1)}
-			{@render num('max tokens', 'per answer', config.maxNew, (v) => (config.maxNew = Math.round(v)), 16, 256, 16)}
-			{@render num('temperature', 'higher = more varied', config.temperature, (v) => (config.temperature = v), 0.1, 1.5, 0.1)}
+			{@render num('answers per pass', config.groupSize, (v) => (config.groupSize = Math.round(v)), 2, 8, 1)}
+			{@render num('max tokens per answer', config.maxNew, (v) => (config.maxNew = Math.round(v)), 16, 256, 16)}
+			{@render num('temperature', config.temperature, (v) => (config.temperature = v), 0.1, 1.5, 0.1)}
 			{#if config.reward === 'ai' && config.algorithm !== 'dpo'}
 				<label class="space-y-1 text-xs text-gray-400">
 					<span>judge</span>
@@ -176,22 +176,22 @@
 				</label>
 			{/if}
 			{#if config.reward === 'ai' && judgeModeOf(config) === 'pairwise'}
-				{@render num('judge matches', `per answer, of ${config.groupSize - 1}`, config.matchesPerAnswer, (v) => (config.matchesPerAnswer = Math.round(v)), 1, 7, 1)}
+				{@render num('judge matches per answer', config.matchesPerAnswer, (v) => (config.matchesPerAnswer = Math.round(v)), 1, 7, 1)}
 			{/if}
 			{#if config.mode === 'lora'}
-				{@render num('learning rate', 'LoRA', config.loraLearningRate, (v) => (config.loraLearningRate = v), 1e-6, 1e-2, 1e-5)}
-				{@render num('LoRA rank', 'adapter size', config.loraRank, (v) => (config.loraRank = Math.round(v)), 1, 64, 1)}
+				{@render num('learning rate', config.loraLearningRate, (v) => (config.loraLearningRate = v), 1e-6, 1e-2, 1e-5)}
+				{@render num('LoRA rank', config.loraRank, (v) => (config.loraRank = Math.round(v)), 1, 64, 1)}
 			{:else}
-				{@render num('learning rate', 'whole model', config.fullLearningRate, (v) => (config.fullLearningRate = v), 1e-7, 1e-3, 1e-6)}
+				{@render num('learning rate', config.fullLearningRate, (v) => (config.fullLearningRate = v), 1e-7, 1e-3, 1e-6)}
 			{/if}
 			{#if config.algorithm === 'dpo'}
 				<!-- DPO works but isn't exposed in the UI (mostly because GRPO playground was a better name, LOL). if you do ?mode=dpo or go to dpo.lucasgelfond.online you can try the DPO version -->
 				<!-- DPO's knobs, in place of GRPO's KL penalty. -->
-				{@render num('DPO pairs', 'per pass', config.dpoPairs, (v) => (config.dpoPairs = Math.round(v)), 1, 10, 1)}
-				{@render num('DPO min confidence', '|p − 0.5|', config.dpoMinConfidence, (v) => (config.dpoMinConfidence = v), 0, 0.5, 0.05)}
-				{@render num('DPO β', 'margin strength', config.dpoBeta, (v) => (config.dpoBeta = v), 0.01, 1, 0.01)}
+				{@render num('DPO pairs per pass', config.dpoPairs, (v) => (config.dpoPairs = Math.round(v)), 1, 10, 1)}
+				{@render num('DPO min confidence', config.dpoMinConfidence, (v) => (config.dpoMinConfidence = v), 0, 0.5, 0.05)}
+				{@render num('DPO β', config.dpoBeta, (v) => (config.dpoBeta = v), 0.01, 1, 0.01)}
 			{:else}
-				{@render num('KL penalty β', '0 turns it off', config.klBeta, (v) => (config.klBeta = v), 0, 1, 0.01)}
+				{@render num('KL penalty β', config.klBeta, (v) => (config.klBeta = v), 0, 1, 0.01)}
 			{/if}
 			{#if config.reward === 'ai' && judgeModeOf(config) === 'pairwise'}
 				<label class="flex items-center gap-2 self-end pb-1.5 text-xs text-gray-400">
