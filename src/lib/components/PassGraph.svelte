@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { Answer, Pass } from '$lib/state/runtime.svelte';
+	import { flip } from 'svelte/animate';
 	import GraphNode from './GraphNode.svelte';
 
 	const {
@@ -88,14 +89,13 @@
 	let available = $state(width);
 	const scale = $derived(Math.min(1, available / width));
 
-	/** Answers ordered by the judge's score, best first; unscored ones last. */
-	const ranking = $derived(
+	const entries = $derived(
 		(pass?.answers ?? [])
 			.map((a, i) => ({ i, score: a.verdict?.score, adv: a.advantage }))
 			.concat(pass?.reference ? [{ i: pass.answers.length, score: pass.reference.verdict?.score, adv: undefined }] : [])
-			.filter((r) => r.score !== undefined)
-			.sort((a, b) => b.score! - a.score! || a.i - b.i)
 	);
+	/** Answers ordered by the judge's score, best first. */
+	const ranking = $derived(entries.filter((r) => r.score !== undefined).sort((a, b) => b.score! - a.score! || a.i - b.i));
 	const midY = $derived(PAD + height / 2);
 	const rowY = (i: number) => PAD + (i + 0.5) * ROW;
 
@@ -105,6 +105,8 @@
 	);
 	const stateFor = (stage: number): EdgeState =>
 		phaseIndex === stage ? 'flowing' : phaseIndex > stage ? 'done' : 'idle';
+	// Once judging starts every answer holds a row, so the box keeps its size as scores land.
+	const rankRows = $derived(phaseIndex >= 1 ? [...ranking, ...entries.filter((r) => r.score === undefined)] : []);
 
 	function curve(x1: number, y1: number, x2: number, y2: number) {
 		const mid = (x1 + x2) / 2;
@@ -352,14 +354,14 @@
 			<GraphNode width={RANK_W} fraction={pass ? ranking.length / pass.answers.length : 0} live={pass?.phase === 'judging'}>
 				<div class="label">ranking</div>
 				<ol class="mt-1.5 space-y-0.5 text-[1.07rem] tabular-nums">
-					{#each ranking as r, rank (r.i)}
-						<li class="grid grid-cols-[1.1rem_1.9rem_1fr_2.2rem] items-center gap-1.5">
-							<span class="text-ink-soft">{rank + 1}</span>
+					{#each rankRows as r, rank (r.i)}
+						<li animate:flip={{ duration: 400 }} class="grid grid-cols-[1.1rem_1.9rem_1fr_2.2rem] items-center gap-1.5">
+							<span class="text-ink-soft">{r.score === undefined ? '' : rank + 1}</span>
 							<span class={r.i === G ? 'text-ink-soft' : ''}>{nameOf(r.i)}</span>
 							<div class="h-1.5 overflow-hidden rounded-full bg-muted">
 								<div
-									class={['h-full rounded-full', r.adv === undefined ? 'bg-gray-200' : r.adv > 0 ? 'bg-up' : r.adv < 0 ? 'bg-down' : 'bg-ink-soft']}
-									style:width="{r.score! * 100}%"
+									class={['h-full rounded-full transition-[width,background-color] duration-500', r.adv === undefined ? 'bg-gray-200' : r.adv > 0 ? 'bg-up' : r.adv < 0 ? 'bg-down' : 'bg-ink-soft']}
+									style:width="{(r.score ?? 0) * 100}%"
 								></div>
 							</div>
 							<span class="text-right">{pct(r.score)}</span>
