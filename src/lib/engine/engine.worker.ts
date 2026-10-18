@@ -126,6 +126,7 @@ export class Engine {
 		const kept = input.mode === 'lora' && this.#trainer?.settings.mode === 'lora' && this.#policyDef?.id === input.policyId;
 		const keptWeights = kept ? this.#trainer!.weights : null;
 		this.#disposeAll(keepJudge, kept);
+		this.#awaiting = null;
 		const policyDef = getModel(input.policyId);
 		const judgeDef = getModel(input.judgeId);
 
@@ -331,6 +332,11 @@ export class Engine {
 		if (!scored) throw new Error('No pass is waiting for a pick.');
 		this.#awaiting = null;
 		scored.pass.awaitingChoice = false;
+		if (input.best === null) {
+			// None picked: nothing to learn from this group.
+			Object.assign(scored.pass, { phase: 'done', skipped: true, unpicked: true } satisfies Partial<Pass>);
+			return scored.pass;
+		}
 		const scores = scored.pass.answers.map((_, i) => (i === input.best ? 1 : 0));
 		return this.#update(scored, scores, progress);
 	}
@@ -502,6 +508,17 @@ export class Engine {
 	 * Parameters for one side of the chat. `source` is 'session', a saved
 	 * model id, or 'original' (the untouched base of the given model).
 	 */
+	/**
+	 * The compiled model applies the loaded session's LoRA scale (alpha / rank),
+	 * so fold a saved adapter's own scale into its B matrices.
+	 */
+	#rescaled(lora: Lora, meta: SavedMeta): Lora {
+		const ratio = meta.loraAlpha / meta.loraRank / this.#trainer!.model.loraScale;
+		if (ratio === 1) return lora;
+		for (const layer of lora) for (const pair of Object.values(layer)) pair.b = pair.b.mul(ratio);
+		return lora;
+	}
+
 	async #chatSide(source: string, baseId: string, saved: SavedMeta[]) {
 		if (source === 'session') {
 			if (!this.#trainer || !this.#policyDef || !this.#policyTok) throw new Error('No training session loaded.');
@@ -519,7 +536,7 @@ export class Engine {
 			const bytes = await loadSavedWeights(source);
 			const side =
 				meta.mode === 'lora'
-					? { weights: original.weights, lora: parseLora(bytes, def.config) }
+					? { weights: original.weights, lora: this.#rescaled(parseLora(bytes, def.config), meta) }
 					: { weights: parseWeights(bytes, def.config), lora: null };
 			this.#chatSaved = { id: source, side };
 		}

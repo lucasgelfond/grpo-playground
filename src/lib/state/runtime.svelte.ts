@@ -49,9 +49,14 @@ export type Pass = {
 	matchesTotal?: number;
 	/** Human feedback: sampled, and waiting for a pick on the train page. */
 	awaitingChoice?: boolean;
+	/** Human feedback: you skipped the pass, so nothing was trained. */
+	unpicked?: boolean;
 	/** [layer][target] ||ΔW|| from the original weights, after this pass. */
 	layerNorms?: number[][];
 };
+
+/** A human-feedback pass whose pick can no longer be used (the session was replaced). */
+class PickCancelled extends Error {}
 
 export type LoadItem = { label: string; loaded: number; total: number; downloaded: number; done: boolean };
 
@@ -140,6 +145,12 @@ class Runtime {
 
 	/** Download (or read from cache) both models and set up a fresh trainer. */
 	async load(): Promise<void> {
+		// A reload replaces the trainer, so a group still waiting on a pick can't be trained.
+		this.#pick?.reject(new PickCancelled());
+		return this.#exclusive(() => this.#load());
+	}
+
+	async #load(): Promise<void> {
 		if (this.loading) return;
 		const key = trainingKey(config);
 		if (this.ready && key === this.#loadedKey) return;
@@ -245,59 +256,67 @@ class Runtime {
 	async runPass(): Promise<void> {
 		if (this.running) return;
 		this.running = true;
-		return this.#exclusive(() => this.#runPass());
-	}
-
-	async #runPass(): Promise<void> {
 		this.error = null;
+		let pass: Pass | undefined;
+		const onProgress = (u: PassUpdate) => {
+			if (u.status !== undefined) this.status = u.status;
+			if (u.pass && pass) merge(pass, u.pass);
+		};
 		try {
-			await this.load();
-			if (!this.ready) return;
-			const prompt = this.#nextPrompt();
-			const index = this.passes.length;
-			this.passes.push({
-				index,
-				prompt,
-				phase: 'prefill',
-				answers: Array.from({ length: config.groupSize }, () => ({ tokens: [], text: '', stopped: false, pieces: [] }))
-			});
-			const pass = this.passes[index];
-			const onProgress = (u: PassUpdate) => {
-				if (u.status !== undefined) this.status = u.status;
-				if (u.pass) merge(pass, u.pass);
-			};
-			let done = await engine(
-				'runPass',
-				{
+			let done = await this.#exclusive(async () => {
+				await this.#load();
+				if (!this.ready) return null;
+				const prompt = this.#nextPrompt();
+				const index = this.passes.length;
+				this.passes.push({
 					index,
 					prompt,
-					config: $state.snapshot(config),
-					save: { ...this.#saveTarget(this.sessionId, this.sessionName, this.sessionCreatedAt), passes: index + 1 }
-				},
-				onProgress
-			);
+					phase: 'prefill',
+					answers: Array.from({ length: config.groupSize }, () => ({ tokens: [], text: '', stopped: false, pieces: [] }))
+				});
+				pass = this.passes[index];
+				return engine(
+					'runPass',
+					{
+						index,
+						prompt,
+						config: $state.snapshot(config),
+						save: { ...this.#saveTarget(this.sessionId, this.sessionName, this.sessionCreatedAt), passes: index + 1 }
+					},
+					onProgress
+				);
+			});
+			if (!done || !pass) return;
 			merge(pass, done);
 			if (done.awaitingChoice) {
-				// Human feedback: wait for a pick (or a skip) on the train page.
-				const best = await new Promise<number | null>((resolve) => (this.#choose = resolve));
-				this.#choose = null;
-				done = await engine('finishPass', { best }, onProgress);
+				// Human feedback: wait for a pick (or a skip) on the train page. The
+				// GPU is free meanwhile, so the evaluate page can chat.
+				const best = await new Promise<number | null>((resolve, reject) => (this.#pick = { resolve, reject }));
+				this.#pick = null;
+				done = await this.#exclusive(() => engine('finishPass', { best }, onProgress));
 				merge(pass, done);
 			}
 			if (this.#projectId !== null && this.#policyRowId !== null) {
-				await recordPass(this.#projectId, this.#policyRowId, pass.index, prompt, $state.snapshot(pass)).catch((e) =>
+				await recordPass(this.#projectId, this.#policyRowId, pass.index, pass.prompt, $state.snapshot(pass)).catch((e) =>
 					console.warn('Could not record the pass', e)
 				);
 			}
 			await this.refreshSaved();
-			this.status = pass.skipped
-				? `Pass ${index + 1}: the answers scored about the same, so there was nothing to learn`
-				: `Pass ${index + 1} done`;
+			this.status = pass.unpicked
+				? `Pass ${pass.index + 1}: skipped, none picked`
+				: pass.skipped
+					? `Pass ${pass.index + 1}: the answers scored about the same, so there was nothing to learn`
+					: `Pass ${pass.index + 1} done`;
 		} catch (e) {
-			console.error(e);
-			this.error = e instanceof Error ? e.message : String(e);
+			// A failed or cancelled pass leaves nothing half-done behind.
+			if (pass && this.passes.at(-1) === pass) this.passes.pop();
 			this.playing = false;
+			if (!(e instanceof PickCancelled)) {
+				console.error(e);
+				this.error = e instanceof Error ? e.message : String(e);
+			}
 		} finally {
+			this.#pick = null;
 			this.running = false;
 		}
 	}
@@ -316,12 +335,12 @@ class Runtime {
 		this.playing = false;
 	}
 
-	/** Resolves the pick a human-feedback pass is waiting on. */
-	#choose: ((best: number | null) => void) | null = null;
+	/** Settles the pick a human-feedback pass is waiting on. */
+	#pick: { resolve: (best: number | null) => void; reject: (e: Error) => void } | null = null;
 
 	/** Human feedback: train on answer `best` of the current pass, or skip it (null). */
 	choose(best: number | null) {
-		this.#choose?.(best);
+		this.#pick?.resolve(best);
 	}
 
 	/**
@@ -363,7 +382,8 @@ class Runtime {
 				loraRank: Number(r.settings.loraRank ?? 16),
 				loraAlpha: Number(r.settings.loraAlpha ?? 32),
 				passes: r.passes,
-				constitution: r.judge_prompt ?? '',
+				// What it was trained for: the task line, or the judge prompt for projects from before tasks.
+				constitution: (r.settings.task as string | undefined) || (r.settings.reward === 'code' ? 'code reward' : r.settings.reward === 'human' ? 'human feedback' : (r.judge_prompt ?? '')),
 				bytes: 0
 			}));
 		} catch (e) {
@@ -430,7 +450,9 @@ class Runtime {
 		histories: [ChatTurn[], ChatTurn[]],
 		onText: (side: 0 | 1, text: string) => void
 	): Promise<[string, string]> {
-		this.chatWaiting = this.running;
+		// Chatting on another base model replaces the training session.
+		if (baseId !== this.policyDef?.id) this.#pick?.reject(new PickCancelled());
+		this.chatWaiting = this.running && !this.#pick;
 		return this.#exclusive(async () => {
 			this.chatWaiting = false;
 			if (!(await this.initGpu())) throw new Error('WebGPU is not available in this browser.');

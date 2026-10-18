@@ -378,7 +378,7 @@
 						<div><span class="text-up">↑</span> {pushed.up.map(letter).join(' ')}</div>
 						<div><span class="text-down">↓</span> {pushed.down.map(letter).join(' ')}</div>
 					{:else if pass?.phase === 'done'}
-						<span class="text-ink-soft">skipped: scores nearly tied</span>
+						<span class="text-ink-soft">{pass.unpicked ? 'skipped: none picked' : 'skipped: scores nearly tied'}</span>
 					{:else if pass?.phase === 'updating'}
 						<span class="text-ink-soft">updating…</span>
 					{/if}
